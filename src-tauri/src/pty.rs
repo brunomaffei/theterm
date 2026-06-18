@@ -105,6 +105,13 @@ pub fn pty_spawn(
         cmd.arg("-NoExit");
         cmd.arg("-Command");
         cmd.arg(dot_source);
+    } else {
+        // Spawn POSIX shells (zsh/bash/…) as LOGIN shells so they source the
+        // user's profile (~/.zprofile, ~/.zshrc, /etc/profile) and inherit the
+        // full PATH. A GUI app launched from Finder/Dock on macOS gets only a
+        // minimal PATH, so a non-login shell wouldn't find tools the user has
+        // (claude, brew, node, …). This matches Terminal.app's behavior.
+        cmd.arg("-l");
     }
 
     // Use the requested workspace directory if it exists, else a sensible default.
