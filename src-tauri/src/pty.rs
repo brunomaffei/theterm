@@ -122,6 +122,12 @@ pub fn pty_spawn(
         .unwrap_or_else(default_cwd);
     cmd.cwd(workdir);
 
+    // Advertise color support so the shell and TUIs (claude!) emit colors. A
+    // Finder-launched GUI app inherits no TERM, so without this Unix CLIs fall
+    // back to monochrome. xterm.js renders 256-color + truecolor fine.
+    cmd.env("TERM", "xterm-256color");
+    cmd.env("COLORTERM", "truecolor");
+
     let child = pair
         .slave
         .spawn_command(cmd)
