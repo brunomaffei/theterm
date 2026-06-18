@@ -37,7 +37,15 @@ export default function AgentsPanel({ state }: { state: AgentState }): JSX.Eleme
     return () => window.clearInterval(id);
   }, [state.working]);
 
-  const activeCount = state.workers.filter((w) => w.active).length;
+  // Status word driven purely by `working` (a sticky flag, ~9s window) instead
+  // of a live "N active" count. The count was structurally 0 or 1 — only the
+  // newest tool ever spins — so it visibly flickered 1↔0 across Claude's
+  // think/network pauses. A single steady label reads calmer and truer.
+  const status = state.working
+    ? 'trabalhando'
+    : state.workers.length > 0
+      ? 'concluído'
+      : 'ocioso';
   const elapsed = state.startedAt
     ? Math.max(0, Math.round((Date.now() - state.startedAt) / 1000))
     : 0;
@@ -49,11 +57,9 @@ export default function AgentsPanel({ state }: { state: AgentState }): JSX.Eleme
           className={`agents__pulse ${state.working ? 'agents__pulse--on' : ''}`}
           aria-hidden="true"
         />
-        <span className="agents__title">
-          agentes{state.working ? ' · trabalhando' : ''}
-        </span>
-        <span className="agents__count">
-          {activeCount} ativo{activeCount === 1 ? '' : 's'}
+        <span className="agents__title">agentes</span>
+        <span className={`agents__count ${state.working ? 'agents__count--on' : ''}`}>
+          {status}
         </span>
       </div>
 

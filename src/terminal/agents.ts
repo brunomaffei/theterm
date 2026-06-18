@@ -39,13 +39,15 @@ const KNOWN = new Set([
   'Fetch',
 ]);
 
-const SPINNER = /[✻✶✳✢✽✺⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/;
+const SPINNER = /[✻✶✳✢✽✺✷✸✹✦✱✲⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⠛⠟⠿⣷⣯⣟⡿⢿⣻⣽⣾]/;
 const TOOL_PAREN = /\b([A-Z][A-Za-z0-9]+)\(([^)\n]{0,80})/g;
 const TOOL_BULLET = /[●⏺•◆]\s*([A-Z][A-Za-z0-9]+)\b[ \t]*([^\n]{0,60})/g;
 
 // The "· trabalhando" pulse/label turns off this long after the last signal,
-// at which point every row settles into a checkmark.
-const WORKING_OFF_MS = 4000;
+// at which point every row settles into a checkmark. Generous on purpose:
+// Claude pauses (thinking, network) between tool calls, and a short window
+// made the state flip working->idle->working — read as a flickering count.
+const WORKING_OFF_MS = 9000;
 // The panel stays MOUNTED (showing the finished run) until this long after the
 // last signal, so the routine pauses between Claude's steps don't unmount and
 // remount it — which is what made the side panel look like it kept restarting.
