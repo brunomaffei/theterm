@@ -1,0 +1,35 @@
+# Dependencies
+node_modules
+
+# Build output
+dist
+dist-ssr
+
+# Rust / Tauri
+/src-tauri/target
+
+# Logs
+*.log
+.setup-toolchain.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor / IDE
+.vscode/*
+!.vscode/extensions.json
+.idea
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Local env
+.env
+.env.local
+.env.*.local
+
+# Claude Code local config
+.claude/

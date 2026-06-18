@@ -1,0 +1,4 @@
+# Rust build output
+/target
+
+# NOTE: Cargo.lock is intentionally NOT ignored (this crate produces a binary).

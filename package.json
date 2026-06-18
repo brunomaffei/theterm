@@ -1,0 +1,34 @@
+{
+  "name": "theterm",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@fontsource/chakra-petch": "^5.2.7",
+    "@fontsource/jetbrains-mono": "^5.2.8",
+    "@tabler/icons-webfont": "^3.44.0",
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-dialog": "^2.7.1",
+    "@xterm/addon-fit": "^0.10",
+    "@xterm/addon-search": "^0.15",
+    "@xterm/addon-web-links": "^0.11",
+    "@xterm/xterm": "^5.5",
+    "monaco-editor": "^0.55.1",
+    "react": "^18.3",
+    "react-dom": "^18.3"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "@types/react": "^18.3",
+    "@types/react-dom": "^18.3",
+    "@vitejs/plugin-react": "^4.3",
+    "typescript": "^5.6",
+    "vite": "^5.4"
+  }
+}

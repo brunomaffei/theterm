@@ -1,0 +1,185 @@
+// Lightweight persisted UI state: AI command history + onboarding flag.
+
+const HISTORY_KEY = 'theterm.history';
+const ONBOARDED_KEY = 'theterm.onboarded';
+const HISTORY_MAX = 12;
+
+export interface HistoryItem {
+  query: string;
+  command: string;
+}
+
+export function loadHistory(): HistoryItem[] {
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return parsed
+        .filter(
+          (x): x is HistoryItem =>
+            !!x &&
+            typeof (x as HistoryItem).query === 'string' &&
+            typeof (x as HistoryItem).command === 'string',
+        )
+        .slice(0, HISTORY_MAX);
+    }
+  } catch {
+    /* ignore */
+  }
+  return [];
+}
+
+export function pushHistory(item: HistoryItem): HistoryItem[] {
+  const existing = loadHistory().filter((h) => h.query !== item.query);
+  const next = [item, ...existing].slice(0, HISTORY_MAX);
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
+  } catch {
+    /* ignore */
+  }
+  return next;
+}
+
+export function isOnboarded(): boolean {
+  try {
+    return localStorage.getItem(ONBOARDED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function setOnboarded(): void {
+  try {
+    localStorage.setItem(ONBOARDED_KEY, '1');
+  } catch {
+    /* ignore */
+  }
+}
+
+const AUTO_UPDATE_KEY = 'theterm.autoUpdate';
+const LAST_CHECK_KEY = 'theterm.claudeLastCheck';
+
+/** Auto-update the Claude CLI on startup (default ON). */
+export function getAutoUpdate(): boolean {
+  try {
+    return localStorage.getItem(AUTO_UPDATE_KEY) !== '0';
+  } catch {
+    return true;
+  }
+}
+
+export function setAutoUpdate(on: boolean): void {
+  try {
+    localStorage.setItem(AUTO_UPDATE_KEY, on ? '1' : '0');
+  } catch {
+    /* ignore */
+  }
+}
+
+const THEME_ID_KEY = 'theterm.themeId';
+
+export function getThemeId(): string {
+  try {
+    return localStorage.getItem(THEME_ID_KEY) || 'cyber-lime';
+  } catch {
+    return 'cyber-lime';
+  }
+}
+
+export function setThemeId(id: string): void {
+  try {
+    localStorage.setItem(THEME_ID_KEY, id);
+  } catch {
+    /* ignore */
+  }
+}
+
+const AUTO_CLAUDE_KEY = 'theterm.autoClaude';
+
+/** Auto-run `claude` when a terminal opens (default ON). */
+export function getAutoClaude(): boolean {
+  try {
+    return localStorage.getItem(AUTO_CLAUDE_KEY) !== '0';
+  } catch {
+    return true;
+  }
+}
+
+export function setAutoClaude(on: boolean): void {
+  try {
+    localStorage.setItem(AUTO_CLAUDE_KEY, on ? '1' : '0');
+  } catch {
+    /* ignore */
+  }
+}
+
+export function getLastClaudeCheck(): number {
+  try {
+    return Number(localStorage.getItem(LAST_CHECK_KEY)) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+export function setLastClaudeCheck(ts: number): void {
+  try {
+    localStorage.setItem(LAST_CHECK_KEY, String(ts));
+  } catch {
+    /* ignore */
+  }
+}
+
+const LAST_WORKSPACE_KEY = 'theterm.lastWorkspace';
+const EXPLORER_WIDTH_KEY = 'theterm.explorerWidth';
+const EXPLORER_COLLAPSED_KEY = 'theterm.explorerCollapsed';
+
+export function getLastWorkspace(): string | null {
+  try {
+    return localStorage.getItem(LAST_WORKSPACE_KEY) || null;
+  } catch {
+    return null;
+  }
+}
+
+export function setLastWorkspace(path: string | null): void {
+  try {
+    if (path) localStorage.setItem(LAST_WORKSPACE_KEY, path);
+    else localStorage.removeItem(LAST_WORKSPACE_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+export function getExplorerWidth(): number {
+  try {
+    const n = Number(localStorage.getItem(EXPLORER_WIDTH_KEY));
+    return n >= 170 && n <= 520 ? n : 240;
+  } catch {
+    return 240;
+  }
+}
+
+export function setExplorerWidth(px: number): void {
+  try {
+    localStorage.setItem(EXPLORER_WIDTH_KEY, String(Math.round(px)));
+  } catch {
+    /* ignore */
+  }
+}
+
+export function getExplorerCollapsed(): boolean {
+  try {
+    return localStorage.getItem(EXPLORER_COLLAPSED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function setExplorerCollapsed(collapsed: boolean): void {
+  try {
+    localStorage.setItem(EXPLORER_COLLAPSED_KEY, collapsed ? '1' : '0');
+  } catch {
+    /* ignore */
+  }
+}
