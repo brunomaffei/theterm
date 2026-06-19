@@ -174,8 +174,13 @@ export class ActivityDetector {
       this.lastSignal = Date.now();
       if (!this.working) {
         this.working = true;
-        this.startedAt = Date.now();
-        this.actions = 0;
+        // Only reset the run counters for a genuinely fresh run (panel had
+        // cleared). Resuming after a short think/network pause keeps the same
+        // run, so the action count never jumps back to 0.
+        if (this.workers.length === 0) {
+          this.startedAt = Date.now();
+          this.actions = 0;
+        }
       }
       this.ensureTimer();
       this.scheduleEmit();
@@ -183,7 +188,6 @@ export class ActivityDetector {
   }
 
   private addWorker(tool: string, detail: string): void {
-    this.actions += 1;
     const now = Date.now();
     const existing = this.workers.find(
       (w) => w.tool === tool && w.active && now - w.ts < 1500,
@@ -193,6 +197,9 @@ export class ActivityDetector {
       existing.ts = now;
       return;
     }
+    // Count only genuinely NEW actions here — never the same tool line that
+    // Claude's TUI repaints ~10x/s (that made "ações" explode into the hundreds).
+    this.actions += 1;
     // A new action started, so the previous ones are effectively finished:
     // settle them into checkmarks and let only the newest one spin.
     for (const w of this.workers) w.active = false;

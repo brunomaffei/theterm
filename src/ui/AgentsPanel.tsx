@@ -50,27 +50,17 @@ function labelFor(tool: string): string {
 }
 
 export default function AgentsPanel({ state }: { state: AgentState }): JSX.Element {
-  // Tick once a second while working so the elapsed time keeps counting even
-  // when the detector emits no new events (long-running tools).
-  const [, force] = React.useReducer((n: number) => n + 1, 0);
-  React.useEffect(() => {
-    if (!state.working) return;
-    const id = window.setInterval(force, 1000);
-    return () => window.clearInterval(id);
-  }, [state.working]);
-
   // Status word driven purely by `working` (a sticky flag, ~9s window) instead
   // of a live "N active" count. The count was structurally 0 or 1 — only the
   // newest tool ever spins — so it visibly flickered 1↔0 across Claude's
   // think/network pauses. A single steady label reads calmer and truer.
+  // No live stopwatch on purpose: a per-second re-render that also reset on
+  // pauses read as "buggy". The detector emits on real activity; we just render.
   const status = state.working
     ? 'trabalhando'
     : state.workers.length > 0
       ? 'concluído'
       : 'ocioso';
-  const elapsed = state.startedAt
-    ? Math.max(0, Math.round((Date.now() - state.startedAt) / 1000))
-    : 0;
 
   return (
     <aside className="agents">
@@ -120,7 +110,6 @@ export default function AgentsPanel({ state }: { state: AgentState }): JSX.Eleme
       <div className="agents__footer">
         <i className="ti ti-bolt" aria-hidden="true" /> {state.actions}{' '}
         {state.actions === 1 ? 'ação' : 'ações'}
-        {state.startedAt ? ` · ${elapsed}s` : ''}
       </div>
     </aside>
   );
