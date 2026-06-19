@@ -1,6 +1,7 @@
 mod ai;
 mod config;
 mod fsx;
+mod profile;
 mod pty;
 
 use std::collections::HashMap;
@@ -53,6 +54,8 @@ pub fn run() {
             fsx::write_file,
             fsx::watch_dir,
             fsx::git_status,
+            profile::project_profile,
+            profile::apply_loadout,
         ])
         .run(tauri::generate_context!())
         .expect("error running tauri app");

@@ -36,7 +36,9 @@ import StatusBar from './ui/StatusBar';
 import CommandPalette from './ui/CommandPalette';
 import Onboarding from './ui/Onboarding';
 import AgentsPanel from './ui/AgentsPanel';
+import ProfilePanel from './ui/ProfilePanel';
 import type { AgentState } from './terminal/agents';
+import { projectProfile, applyLoadout, type Profile } from './profile/client';
 
 function baseName(p: string): string {
   const parts = p.split(/[/\\]/).filter(Boolean);
@@ -77,6 +79,12 @@ export default function App(): JSX.Element {
   const [claudeInfo, setClaudeInfo] = useState<ClaudeInfo | null>(null);
   const [updatingClaude, setUpdatingClaude] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+
+  // Project Profiler: detected stack + recommended agent loadout for the open
+  // workspace, shown as a card the user can apply with one click.
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [profileVisible, setProfileVisible] = useState(false);
+  const [applyingLoadout, setApplyingLoadout] = useState(false);
 
   const controllersRef = useRef<Map<string, TerminalController>>(new Map());
   const seqRef = useRef(2);
@@ -128,6 +136,47 @@ export default function App(): JSX.Element {
     setToast(msg);
     window.setTimeout(() => setToast((cur) => (cur === msg ? null : cur)), 5500);
   }, []);
+
+  // --- Project Profiler ----------------------------------------------------
+  // Whenever a workspace is opened, scan it and surface the recommended agent
+  // team. Cheap, best-effort: failures just leave the card hidden.
+  useEffect(() => {
+    if (!workspace) {
+      setProfile(null);
+      setProfileVisible(false);
+      return;
+    }
+    let cancelled = false;
+    projectProfile(workspace)
+      .then((p) => {
+        if (cancelled) return;
+        setProfile(p);
+        setProfileVisible(true);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [workspace]);
+
+  const handleApplyLoadout = useCallback(
+    (agentIds: string[]) => {
+      if (!profile) return;
+      setApplyingLoadout(true);
+      applyLoadout(profile.path, agentIds)
+        .then(() => {
+          setProfileVisible(false);
+          showToast(
+            'Time preparado! Reinicie o claude (ou abra um novo terminal) para carregar os agentes.',
+          );
+        })
+        .catch((err: unknown) => {
+          showToast(`Falha ao preparar: ${err instanceof Error ? err.message : String(err)}`);
+        })
+        .finally(() => setApplyingLoadout(false));
+    },
+    [profile, showToast],
+  );
 
   // --- Claude version + auto-update ----------------------------------------
   const updateClaude = useCallback(() => {
@@ -504,6 +553,15 @@ export default function App(): JSX.Element {
         onConfigureKey={handleConfigureKey}
         onUpdateClaude={updateClaude}
       />
+
+      {profileVisible && profile && (
+        <ProfilePanel
+          profile={profile}
+          applying={applyingLoadout}
+          onApply={handleApplyLoadout}
+          onDismiss={() => setProfileVisible(false)}
+        />
+      )}
 
       {toast && (
         <div className="toast" role="status" onClick={() => setToast(null)}>
