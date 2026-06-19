@@ -17,6 +17,28 @@ const ICONS: Record<string, string> = {
   NotebookEdit: 'ti-notebook',
   TodoWrite: 'ti-checklist',
   LS: 'ti-folder',
+  Explore: 'ti-compass',
+  Plan: 'ti-map-2',
+  Agent: 'ti-robot',
+  General: 'ti-robot',
+  Research: 'ti-zoom-scan',
+  Review: 'ti-eye',
+  Build: 'ti-hammer',
+  Debug: 'ti-bug',
+  Subagent: 'ti-robot',
+};
+
+// A few agent types get a friendlier Portuguese label; everything else shows
+// its own name.
+const LABELS: Record<string, string> = {
+  Task: 'subagente',
+  Subagent: 'subagente',
+  Explore: 'explorando',
+  Plan: 'planejando',
+  Search: 'buscando',
+  Research: 'pesquisando',
+  Review: 'revisando',
+  Debug: 'depurando',
 };
 
 function iconFor(tool: string): string {
@@ -24,7 +46,7 @@ function iconFor(tool: string): string {
 }
 
 function labelFor(tool: string): string {
-  return tool === 'Task' ? 'subagente' : tool;
+  return LABELS[tool] ?? tool;
 }
 
 export default function AgentsPanel({ state }: { state: AgentState }): JSX.Element {
