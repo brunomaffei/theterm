@@ -7,7 +7,7 @@
 // (so their login/session stays intact).
 
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
@@ -88,7 +88,7 @@ const CATALOG: &[CatalogEntry] = &[
         description: "React, Next, Vue, Svelte, UI e acessibilidade",
         icon: "ti-brand-react",
         core: false,
-        tags: &["react", "next", "vue", "svelte", "frontend"],
+        tags: &["react", "next", "vue", "svelte", "angular", "frontend"],
         body: include_str!("../agents-catalog/frontend-expert.md"),
     },
     CatalogEntry {
@@ -154,138 +154,287 @@ pub struct Profile {
     pub summary: String,
 }
 
-/// Read a top-level file (small, best-effort) into a lowercased string.
-fn read_lower(dir: &Path, name: &str) -> Option<String> {
-    let p = dir.join(name);
-    std::fs::read_to_string(p).ok().map(|s| s.to_lowercase())
+/// Directories never worth descending into — heavy, generated, or vendored.
+const SKIP_DIRS: &[&str] = &[
+    "node_modules",
+    ".git",
+    "target",
+    "dist",
+    "build",
+    ".next",
+    "out",
+    ".venv",
+    "venv",
+    "__pycache__",
+    "vendor",
+    ".cache",
+    "coverage",
+    ".turbo",
+    ".svelte-kit",
+    ".nuxt",
+    ".angular",
+    "bin",
+    "obj",
+    ".idea",
+    ".vscode",
+];
+
+/// What a bounded walk of the project turned up.
+#[derive(Default)]
+struct Scan {
+    /// Lowercased base filenames seen anywhere in the walk.
+    files: BTreeSet<String>,
+    /// Lowercased directory names seen.
+    dirs: BTreeSet<String>,
+    /// Lowercased file extensions seen.
+    exts: BTreeSet<String>,
+    /// Concatenated, lowercased contents of every package.json found.
+    pkg: String,
 }
 
-fn exists(dir: &Path, rel: &str) -> bool {
-    dir.join(rel).exists()
+/// Walk the project up to a few levels deep (skipping heavy dirs), gathering the
+/// signals we need to infer the stack — including from nested packages, which a
+/// shallow root-only check would miss (monorepos, apps/*, packages/*).
+fn scan_tree(root: &Path) -> Scan {
+    let mut scan = Scan::default();
+    let mut stack: Vec<(PathBuf, usize)> = vec![(root.to_path_buf(), 0)];
+    let mut budget: i32 = 6000;
+
+    while let Some((dir, depth)) = stack.pop() {
+        if budget <= 0 {
+            break;
+        }
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in rd.flatten() {
+            if budget <= 0 {
+                break;
+            }
+            budget -= 1;
+            let name = entry.file_name().to_string_lossy().to_lowercase();
+            let Ok(ft) = entry.file_type() else { continue };
+            if ft.is_dir() {
+                scan.dirs.insert(name.clone());
+                // Descend unless it's a skip dir or a hidden dir (except .github,
+                // which carries CI workflows).
+                let skip = SKIP_DIRS.contains(&name.as_str())
+                    || (name.starts_with('.') && name != ".github");
+                if !skip && depth < 3 {
+                    stack.push((entry.path(), depth + 1));
+                }
+            } else {
+                scan.files.insert(name.clone());
+                if let Some(ext) = entry.path().extension().and_then(|e| e.to_str()) {
+                    scan.exts.insert(ext.to_lowercase());
+                }
+                if name == "package.json" {
+                    if let Ok(s) = std::fs::read_to_string(entry.path()) {
+                        scan.pkg.push_str(&s.to_lowercase());
+                        scan.pkg.push('\n');
+                    }
+                }
+            }
+        }
+    }
+    scan
 }
 
-/// Inspect the directory and return the set of detected stack tags + labels.
+/// Inspect the directory tree and return detected stack tags + human labels.
 fn detect(dir: &Path) -> (BTreeSet<String>, Vec<String>) {
+    let s = scan_tree(dir);
     let mut stacks: BTreeSet<String> = BTreeSet::new();
     let mut labels: Vec<String> = Vec::new();
-    let add_label = |labels: &mut Vec<String>, l: &str| {
+
+    let label = |labels: &mut Vec<String>, l: &str| {
         if !labels.iter().any(|x| x == l) {
             labels.push(l.to_string());
         }
     };
+    let dep = |needle: &str| s.pkg.contains(needle);
+    let file = |n: &str| s.files.contains(n);
+    let ext = |e: &str| s.exts.contains(e);
+    let file_prefix = |p: &str| s.files.iter().any(|f| f.starts_with(p));
 
-    // Node / JS ecosystem via package.json (+ its dependency names).
-    if let Some(pkg) = read_lower(dir, "package.json") {
+    // --- Node / JS ecosystem ---
+    let is_node = file("package.json");
+    if is_node {
         stacks.insert("node".into());
-        add_label(&mut labels, "Node");
-        let has = |needle: &str| pkg.contains(needle);
-        if has("\"typescript\"") || exists(dir, "tsconfig.json") {
+
+        // TypeScript vs plain JS.
+        if dep("\"typescript\"") || file_prefix("tsconfig") || ext("ts") || ext("tsx") {
             stacks.insert("typescript".into());
-            add_label(&mut labels, "TypeScript");
+            label(&mut labels, "TypeScript");
         } else {
             stacks.insert("javascript".into());
+            label(&mut labels, "Node");
         }
-        if has("\"next\"") {
+
+        // Frontend frameworks.
+        let next = dep("\"next\"")
+            || file("next.config.js")
+            || file("next.config.ts")
+            || file("next.config.mjs");
+        if next {
             stacks.insert("next".into());
             stacks.insert("react".into());
-            add_label(&mut labels, "Next.js");
-        } else if has("\"react\"") {
+            label(&mut labels, "Next.js");
+        } else if dep("\"react\"") || ext("tsx") || ext("jsx") {
             stacks.insert("react".into());
-            add_label(&mut labels, "React");
+            label(&mut labels, "React");
         }
-        if has("\"vue\"") {
+        if dep("\"vue\"") || ext("vue") {
             stacks.insert("vue".into());
-            add_label(&mut labels, "Vue");
+            label(&mut labels, "Vue");
         }
-        if has("\"svelte\"") {
+        if dep("\"svelte\"") || ext("svelte") || file("svelte.config.js") {
             stacks.insert("svelte".into());
-            add_label(&mut labels, "Svelte");
+            label(&mut labels, "Svelte");
         }
-        if has("\"express\"") || has("\"@nestjs/core\"") || has("\"fastify\"") {
-            add_label(&mut labels, "API Node");
+        if dep("\"@angular/core\"") {
+            stacks.insert("angular".into());
+            label(&mut labels, "Angular");
         }
-        if has("\"prisma\"") || has("\"@prisma/client\"") {
+        if dep("\"astro\"") {
+            stacks.insert("frontend".into());
+            label(&mut labels, "Astro");
+        }
+        if dep("\"nuxt\"") {
+            stacks.insert("vue".into());
+            label(&mut labels, "Nuxt");
+        }
+        if dep("\"expo\"") || dep("\"react-native\"") {
+            stacks.insert("react".into());
+            label(&mut labels, "React Native");
+        }
+        if dep("\"vite\"") {
+            label(&mut labels, "Vite");
+        }
+        if dep("\"tailwindcss\"") {
+            label(&mut labels, "Tailwind");
+        }
+        if dep("\"graphql\"") {
+            label(&mut labels, "GraphQL");
+        }
+        // Node backend frameworks.
+        if dep("\"express\"")
+            || dep("\"@nestjs/core\"")
+            || dep("\"fastify\"")
+            || dep("\"koa\"")
+            || dep("\"hono\"")
+        {
+            label(&mut labels, "API Node");
+        }
+        // Databases via node libs.
+        if dep("\"prisma\"") || dep("\"@prisma/client\"") {
             stacks.insert("prisma".into());
-            add_label(&mut labels, "Prisma");
+            stacks.insert("sql".into());
+            label(&mut labels, "Prisma");
         }
-        if has("\"tailwindcss\"") {
-            add_label(&mut labels, "Tailwind");
+        if dep("\"drizzle-orm\"") {
+            stacks.insert("sql".into());
+            label(&mut labels, "Drizzle");
         }
+        if dep("\"typeorm\"")
+            || dep("\"sequelize\"")
+            || dep("\"pg\"")
+            || dep("\"mysql2\"")
+            || dep("\"better-sqlite3\"")
+            || dep("\"kysely\"")
+        {
+            stacks.insert("sql".into());
+            label(&mut labels, "SQL");
+        }
+        if dep("\"mongoose\"") || dep("\"mongodb\"") {
+            stacks.insert("mongo".into());
+            label(&mut labels, "MongoDB");
+        }
+        if dep("\"@supabase/supabase-js\"") {
+            stacks.insert("sql".into());
+            label(&mut labels, "Supabase");
+        }
+        if dep("\"redis\"") || dep("\"ioredis\"") {
+            label(&mut labels, "Redis");
+        }
+    } else if ext("ts") || ext("tsx") {
+        // Loose TS without a package.json (rare, but cover it).
+        stacks.insert("node".into());
+        stacks.insert("typescript".into());
+        label(&mut labels, "TypeScript");
     }
 
-    // Rust
-    if exists(dir, "Cargo.toml") {
+    // --- Other languages ---
+    if file("cargo.toml") || ext("rs") {
         stacks.insert("rust".into());
-        add_label(&mut labels, "Rust");
+        label(&mut labels, "Rust");
     }
-    // Python
-    if exists(dir, "requirements.txt")
-        || exists(dir, "pyproject.toml")
-        || exists(dir, "setup.py")
-        || exists(dir, "Pipfile")
+    if file("requirements.txt")
+        || file("pyproject.toml")
+        || file("setup.py")
+        || file("pipfile")
+        || ext("py")
     {
         stacks.insert("python".into());
-        add_label(&mut labels, "Python");
+        label(&mut labels, "Python");
     }
-    // Go
-    if exists(dir, "go.mod") {
+    if file("go.mod") || ext("go") {
         stacks.insert("go".into());
-        add_label(&mut labels, "Go");
+        label(&mut labels, "Go");
     }
-    // Java / Kotlin
-    if exists(dir, "pom.xml") || exists(dir, "build.gradle") || exists(dir, "build.gradle.kts") {
+    if file("pom.xml")
+        || file("build.gradle")
+        || file("build.gradle.kts")
+        || ext("java")
+        || ext("kt")
+    {
         stacks.insert("jvm".into());
-        add_label(&mut labels, "JVM");
+        label(&mut labels, "JVM");
     }
-    // Ruby
-    if exists(dir, "Gemfile") {
+    if file("gemfile") || ext("rb") {
         stacks.insert("ruby".into());
-        add_label(&mut labels, "Ruby");
+        label(&mut labels, "Ruby");
     }
-    // PHP
-    if exists(dir, "composer.json") {
+    if file("composer.json") || ext("php") {
         stacks.insert("php".into());
-        add_label(&mut labels, "PHP");
+        label(&mut labels, "PHP");
     }
 
-    // Databases / infra by config presence.
-    if exists(dir, "prisma/schema.prisma") {
+    // --- Databases / infra by file presence ---
+    if file("schema.prisma") {
         stacks.insert("prisma".into());
         stacks.insert("sql".into());
-        add_label(&mut labels, "Prisma");
+        label(&mut labels, "Prisma");
     }
-    if exists(dir, "docker-compose.yml")
-        || exists(dir, "docker-compose.yaml")
-        || exists(dir, "Dockerfile")
+    if file("dockerfile")
+        || file("docker-compose.yml")
+        || file("docker-compose.yaml")
+        || file("compose.yaml")
+        || file("compose.yml")
     {
         stacks.insert("docker".into());
-        add_label(&mut labels, "Docker");
+        label(&mut labels, "Docker");
     }
-    if exists(dir, ".github/workflows") {
-        stacks.insert("ci".into());
-        add_label(&mut labels, "CI");
-    }
-    if has_ext(dir, "tf") {
+    if ext("tf") {
         stacks.insert("terraform".into());
-        add_label(&mut labels, "Terraform");
+        label(&mut labels, "Terraform");
+    }
+    if file("kustomization.yaml") || file("kustomization.yml") || file("chart.yaml") {
+        stacks.insert("kubernetes".into());
+        label(&mut labels, "Kubernetes");
+    }
+    if s.dirs.contains(".github") || file(".gitlab-ci.yml") {
+        stacks.insert("ci".into());
+        label(&mut labels, "CI");
+    }
+    if file("turbo.json")
+        || file("nx.json")
+        || file("pnpm-workspace.yaml")
+        || file("lerna.json")
+    {
+        label(&mut labels, "Monorepo");
     }
 
     (stacks, labels)
-}
-
-/// Shallow check for any top-level file with the given extension.
-fn has_ext(dir: &Path, ext: &str) -> bool {
-    let Ok(rd) = std::fs::read_dir(dir) else {
-        return false;
-    };
-    for entry in rd.flatten() {
-        if let Some(e) = entry.path().extension() {
-            if e.eq_ignore_ascii_case(ext) {
-                return true;
-            }
-        }
-    }
-    false
 }
 
 /// Select the agent loadout for a detected stack set: every core agent, plus
