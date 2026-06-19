@@ -259,6 +259,24 @@ fn extract_json(text: &str) -> String {
     t.to_string()
 }
 
+/// Reusable structured call for other modules (e.g. the Project Profiler's
+/// AI team selection): snapshots the provider, asks the model for JSON matching
+/// `schema`, and returns the cleaned JSON text (fences/prose stripped). Prefers
+/// the Claude CLI, falls back to the API key. `use_fix_model` picks the stronger
+/// model for reasoning-heavy tasks.
+pub(crate) async fn structured_call(
+    state: &State<'_, AppState>,
+    system: &str,
+    user: &str,
+    schema: &str,
+    max_tokens: u32,
+    use_fix_model: bool,
+) -> Result<String, String> {
+    let inputs = snapshot(state, use_fix_model)?;
+    let raw = obtain_raw(&inputs, system, user, schema, max_tokens).await?;
+    Ok(extract_json(&strip_code_fences(&raw)))
+}
+
 /// Invoke the local `claude` CLI in non-interactive mode and return the result
 /// text from its JSON envelope. Tools are disabled (text only), runs in a
 /// neutral cwd, has a hard timeout, and never pops a console window on Windows.

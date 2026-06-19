@@ -9,7 +9,10 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use tauri::State;
+
+use crate::AppState;
 
 /// One agent in the curated catalog.
 struct CatalogEntry {
@@ -152,6 +155,37 @@ pub struct Profile {
     pub agents: Vec<AgentInfo>,
     /// Short human summary line.
     pub summary: String,
+}
+
+/// A short, AI-extracted brief about the project — woven into CLAUDE.md so
+/// Claude knows this repo's conventions, test command, and architecture.
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectBrief {
+    pub conventions: String,
+    pub test_command: String,
+    pub architecture: String,
+    pub notes: String,
+}
+
+/// One agent the AI picked, with its justification for THIS project.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamPick {
+    pub id: String,
+    pub title: String,
+    pub description: String,
+    pub icon: String,
+    pub core: bool,
+    pub reason: String,
+}
+
+/// Result of an AI team selection: the chosen agents + the project brief.
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamSelection {
+    pub agents: Vec<TeamPick>,
+    pub brief: ProjectBrief,
 }
 
 /// Directories never worth descending into — heavy, generated, or vendored.
@@ -490,13 +524,159 @@ pub fn project_profile(path: String) -> Result<Profile, String> {
     })
 }
 
+/// Render the catalog as an id:description list for the AI prompt.
+fn catalog_for_prompt() -> String {
+    let mut s = String::new();
+    for a in CATALOG {
+        s.push_str(&format!("- {} : {}\n", a.id, a.description));
+    }
+    s
+}
+
+/// Build a small, token-cheap digest of the project for the AI: detected stack,
+/// the root listing, a slice of package.json, and the top of the README.
+fn build_digest(dir: &Path, profile: &Profile) -> String {
+    let mut d = String::new();
+    d.push_str(&format!("Projeto: {}\n", profile.name));
+    let stack = if profile.labels.is_empty() {
+        "genérico".to_string()
+    } else {
+        profile.labels.join(", ")
+    };
+    d.push_str(&format!("Stack detectada (heurística): {stack}\n\n"));
+
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        let mut names: Vec<String> = rd
+            .flatten()
+            .map(|e| {
+                let n = e.file_name().to_string_lossy().to_string();
+                if e.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                    format!("{n}/")
+                } else {
+                    n
+                }
+            })
+            .collect();
+        names.sort();
+        names.truncate(60);
+        d.push_str("Itens na raiz: ");
+        d.push_str(&names.join(", "));
+        d.push_str("\n\n");
+    }
+
+    if let Ok(pkg) = std::fs::read_to_string(dir.join("package.json")) {
+        let snippet: String = pkg.chars().take(1500).collect();
+        d.push_str("package.json (início):\n");
+        d.push_str(&snippet);
+        d.push_str("\n\n");
+    }
+
+    for readme in ["README.md", "readme.md", "Readme.md", "README.MD"] {
+        if let Ok(text) = std::fs::read_to_string(dir.join(readme)) {
+            let head: String = text.lines().take(25).collect::<Vec<_>>().join("\n");
+            d.push_str("README (início):\n");
+            d.push_str(&head);
+            d.push_str("\n\n");
+            break;
+        }
+    }
+
+    if d.len() > 6000 {
+        d.truncate(6000);
+    }
+    d
+}
+
+const TEAM_SCHEMA: &str = r#"{"type":"object","properties":{"agents":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"reason":{"type":"string"}},"required":["id","reason"],"additionalProperties":false}},"brief":{"type":"object","properties":{"conventions":{"type":"string"},"testCommand":{"type":"string"},"architecture":{"type":"string"},"notes":{"type":"string"}},"required":["conventions","testCommand","architecture","notes"],"additionalProperties":false}},"required":["agents","brief"],"additionalProperties":false}"#;
+
+#[derive(Deserialize)]
+struct AiPick {
+    id: String,
+    reason: String,
+}
+
+#[derive(Deserialize)]
+struct AiResult {
+    agents: Vec<AiPick>,
+    brief: ProjectBrief,
+}
+
+/// AI-assisted team selection: ask Claude to pick the best agents for THIS
+/// project (from our catalog) and extract a short project brief. Falls back to
+/// a clear error so the UI can revert to the deterministic loadout.
+#[tauri::command]
+pub async fn ai_select_team(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<TeamSelection, String> {
+    let dir = Path::new(&path);
+    if !dir.is_dir() {
+        return Err(format!("não é uma pasta: {path}"));
+    }
+
+    let profile = project_profile(path.clone())?;
+    let digest = build_digest(dir, &profile);
+    let catalog = catalog_for_prompt();
+
+    let system = "Você é um arquiteto de software sênior. Dado o RESUMO de um projeto e um \
+CATÁLOGO de agentes (subagentes do Claude Code), escolha o MELHOR time para ESTE projeto \
+específico. Regras: escolha SOMENTE ids que existam no catálogo; escolha de 4 a 8 agentes; \
+sempre inclua code-reviewer e security-auditor. Para cada agente, dê uma justificativa curta \
+(1 frase) específica a este projeto. Depois preencha um brief com o que der para inferir: \
+conventions (convenções de código), testCommand (como rodar os testes), architecture (visão \
+geral) e notes (qualquer coisa importante). Responda em PT-BR, APENAS com JSON do schema.";
+
+    let user = format!(
+        "CATÁLOGO DE AGENTES (id : descrição):\n{catalog}\n\nRESUMO DO PROJETO:\n{digest}"
+    );
+
+    let cleaned = crate::ai::structured_call(&state, system, &user, TEAM_SCHEMA, 1300, true).await?;
+    let parsed: AiResult = serde_json::from_str(&cleaned)
+        .map_err(|e| format!("A IA retornou um JSON inválido: {e}. Resposta: {cleaned}"))?;
+
+    let mut agents: Vec<TeamPick> = Vec::new();
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut push = |id: &str, reason: &str| {
+        if seen.contains(id) {
+            return;
+        }
+        if let Some(e) = CATALOG.iter().find(|c| c.id == id) {
+            seen.insert(id.to_string());
+            agents.push(TeamPick {
+                id: e.id.to_string(),
+                title: e.title.to_string(),
+                description: e.description.to_string(),
+                icon: e.icon.to_string(),
+                core: e.core,
+                reason: reason.to_string(),
+            });
+        }
+    };
+
+    for p in &parsed.agents {
+        push(&p.id, &p.reason);
+    }
+    // Safety net: never ship a project without review + security agents.
+    push("code-reviewer", "Incluído por padrão — revisão de qualidade.");
+    push("security-auditor", "Incluído por padrão — checagem de segurança.");
+
+    if agents.is_empty() {
+        return Err("A IA não escolheu nenhum agente válido.".to_string());
+    }
+
+    Ok(TeamSelection {
+        agents,
+        brief: parsed.brief,
+    })
+}
+
 const PROFILE_START: &str = "<!-- THETERM:profile:start -->";
 const PROFILE_END: &str = "<!-- THETERM:profile:end -->";
 
 /// Build the managed CLAUDE.md block that primes Claude with the project's
 /// stack and its active team. Delimited so we can refresh it idempotently
 /// without clobbering anything the user wrote in CLAUDE.md.
-fn profile_block(profile: &Profile) -> String {
+fn profile_block(profile: &Profile, brief: Option<&ProjectBrief>) -> String {
     let mut team = String::new();
     for a in &profile.agents {
         team.push_str(&format!("- **{}** — {}\n", a.id, a.description));
@@ -506,6 +686,28 @@ fn profile_block(profile: &Profile) -> String {
     } else {
         profile.labels.join(", ")
     };
+
+    // AI-extracted brief, when available, primes Claude on this repo's specifics.
+    let brief_section = match brief {
+        Some(b) => {
+            let mut s = String::from("\n### Sobre este repositório\n");
+            if !b.architecture.trim().is_empty() {
+                s.push_str(&format!("**Arquitetura:** {}\n\n", b.architecture.trim()));
+            }
+            if !b.conventions.trim().is_empty() {
+                s.push_str(&format!("**Convenções:** {}\n\n", b.conventions.trim()));
+            }
+            if !b.test_command.trim().is_empty() {
+                s.push_str(&format!("**Rodar testes:** `{}`\n\n", b.test_command.trim()));
+            }
+            if !b.notes.trim().is_empty() {
+                s.push_str(&format!("**Notas:** {}\n\n", b.notes.trim()));
+            }
+            s
+        }
+        None => String::new(),
+    };
+
     format!(
         "{PROFILE_START}\n\
 ## Perfil do projeto (gerado pelo THETERM)\n\n\
@@ -516,6 +718,7 @@ Use estes subagentes proativamente: planeje com `architect` antes de mudanças \
 grandes, escreva testes com `test-engineer`, e antes de abrir um PR passe por \
 `code-reviewer` e `security-auditor`. Siga as convenções já existentes no \
 código deste repositório.\n\
+{brief_section}\
 {PROFILE_END}"
     )
 }
@@ -523,7 +726,11 @@ código deste repositório.\n\
 /// Apply a loadout: write the selected agent definitions into the project's
 /// `.claude/agents/` and refresh the managed block in CLAUDE.md.
 #[tauri::command]
-pub fn apply_loadout(path: String, agent_ids: Vec<String>) -> Result<String, String> {
+pub fn apply_loadout(
+    path: String,
+    agent_ids: Vec<String>,
+    brief: Option<ProjectBrief>,
+) -> Result<String, String> {
     let dir = Path::new(&path);
     if !dir.is_dir() {
         return Err(format!("não é uma pasta: {path}"));
@@ -548,7 +755,7 @@ pub fn apply_loadout(path: String, agent_ids: Vec<String>) -> Result<String, Str
 
     // Merge the managed block into CLAUDE.md (replace if present, else append).
     let claude_md = dir.join("CLAUDE.md");
-    let block = profile_block(&profile);
+    let block = profile_block(&profile, brief.as_ref());
     let new_contents = match std::fs::read_to_string(&claude_md) {
         Ok(existing) => merge_block(&existing, &block),
         Err(_) => format!("{block}\n"),

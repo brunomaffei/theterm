@@ -21,12 +21,39 @@ export interface Profile {
   summary: string;
 }
 
+/** AI-extracted project brief, woven into CLAUDE.md. */
+export interface ProjectBrief {
+  conventions: string;
+  testCommand: string;
+  architecture: string;
+  notes: string;
+}
+
+/** An agent the AI picked, with its per-project justification. */
+export interface TeamPick extends AgentInfo {
+  reason: string;
+}
+
+export interface TeamSelection {
+  agents: TeamPick[];
+  brief: ProjectBrief;
+}
+
 /** Scan a workspace folder and return its profile + recommended loadout. */
 export async function projectProfile(path: string): Promise<Profile> {
   return invoke<Profile>('project_profile', { path });
 }
 
-/** Write the chosen agents + CLAUDE.md block into the project. */
-export async function applyLoadout(path: string, agentIds: string[]): Promise<string> {
-  return invoke<string>('apply_loadout', { path, agentIds });
+/** Ask Claude to pick the best team for this project + extract a brief. */
+export async function aiSelectTeam(path: string): Promise<TeamSelection> {
+  return invoke<TeamSelection>('ai_select_team', { path });
+}
+
+/** Write the chosen agents + CLAUDE.md block (optionally with an AI brief). */
+export async function applyLoadout(
+  path: string,
+  agentIds: string[],
+  brief: ProjectBrief | null = null,
+): Promise<string> {
+  return invoke<string>('apply_loadout', { path, agentIds, brief });
 }

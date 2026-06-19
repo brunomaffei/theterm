@@ -2692,3 +2692,30 @@ kbd {
 .btn-accent:hover { filter: brightness(1.08); }
 .btn-accent:disabled { opacity: 0.55; cursor: default; filter: none; }
 .btn-accent .ti { font-size: 14px; }
+
+.profile-ai-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 0 12px 8px;
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px dashed var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter 0.12s ease, opacity 0.12s ease;
+}
+.profile-ai-btn:hover { filter: brightness(1.12); }
+.profile-ai-btn:disabled { cursor: default; opacity: 0.7; }
+.profile-ai-btn--done {
+  border-style: solid;
+  background: transparent;
+  color: var(--text-dim);
+  border-color: var(--border);
+}
+.profile-ai-btn .ti { font-size: 15px; }
+.spin-ic { animation: spin 0.7s linear infinite; }

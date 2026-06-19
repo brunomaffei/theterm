@@ -4,6 +4,13 @@ import type { Profile } from '../profile/client';
 interface Props {
   profile: Profile;
   applying: boolean;
+  /** Per-agent AI justifications, keyed by agent id (when AI picked the team). */
+  reasons?: Record<string, string> | null;
+  /** True while the AI is choosing the team. */
+  aiLoading: boolean;
+  /** True once the AI has refined the team (changes the button to a re-run). */
+  aiDone: boolean;
+  onAiSelect: () => void;
   onApply: (agentIds: string[]) => void;
   onDismiss: () => void;
 }
@@ -13,6 +20,10 @@ interface Props {
 export default function ProfilePanel({
   profile,
   applying,
+  reasons,
+  aiLoading,
+  aiDone,
+  onAiSelect,
   onApply,
   onDismiss,
 }: Props): JSX.Element {
@@ -20,6 +31,11 @@ export default function ProfilePanel({
   const [selected, setSelected] = React.useState<Set<string>>(
     () => new Set(profile.agents.map((a) => a.id)),
   );
+
+  // Re-sync the selection when the agent set changes (e.g. AI replaced the team).
+  React.useEffect(() => {
+    setSelected(new Set(profile.agents.map((a) => a.id)));
+  }, [profile.agents]);
 
   const toggle = (id: string): void => {
     setSelected((prev) => {
@@ -81,7 +97,9 @@ export default function ProfilePanel({
               </span>
               <span className="profile-agent__body">
                 <span className="profile-agent__name">{a.title}</span>
-                <span className="profile-agent__desc">{a.description}</span>
+                <span className="profile-agent__desc">
+                  {reasons?.[a.id] ?? a.description}
+                </span>
               </span>
               <span className="profile-agent__check">
                 <i
@@ -93,6 +111,24 @@ export default function ProfilePanel({
           );
         })}
       </div>
+
+      <button
+        type="button"
+        className={`profile-ai-btn ${aiDone ? 'profile-ai-btn--done' : ''}`}
+        onClick={onAiSelect}
+        disabled={aiLoading || applying}
+        title="A IA analisa o projeto e escolhe o melhor time + extrai um brief"
+      >
+        <i
+          className={`ti ${aiLoading ? 'ti-loader-2 spin-ic' : aiDone ? 'ti-refresh' : 'ti-sparkles'}`}
+          aria-hidden="true"
+        />
+        {aiLoading
+          ? 'IA analisando o projeto…'
+          : aiDone
+            ? 'Time refinado pela IA · refazer'
+            : 'Deixar a IA montar o time ideal'}
+      </button>
 
       <div className="profile-card__foot">
         <span className="profile-card__hint">

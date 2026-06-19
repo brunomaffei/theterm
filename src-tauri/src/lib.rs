@@ -56,6 +56,7 @@ pub fn run() {
             fsx::git_status,
             profile::project_profile,
             profile::apply_loadout,
+            profile::ai_select_team,
         ])
         .run(tauri::generate_context!())
         .expect("error running tauri app");

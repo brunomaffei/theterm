@@ -38,7 +38,13 @@ import Onboarding from './ui/Onboarding';
 import AgentsPanel from './ui/AgentsPanel';
 import ProfilePanel from './ui/ProfilePanel';
 import type { AgentState } from './terminal/agents';
-import { projectProfile, applyLoadout, type Profile } from './profile/client';
+import {
+  projectProfile,
+  applyLoadout,
+  aiSelectTeam,
+  type Profile,
+  type ProjectBrief,
+} from './profile/client';
 
 function baseName(p: string): string {
   const parts = p.split(/[/\\]/).filter(Boolean);
@@ -85,6 +91,11 @@ export default function App(): JSX.Element {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [profileVisible, setProfileVisible] = useState(false);
   const [applyingLoadout, setApplyingLoadout] = useState(false);
+  // AI team-selection state (the "✨ deixar a IA montar o time" flow).
+  const [aiReasons, setAiReasons] = useState<Record<string, string> | null>(null);
+  const [aiBrief, setAiBrief] = useState<ProjectBrief | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiDone, setAiDone] = useState(false);
 
   const controllersRef = useRef<Map<string, TerminalController>>(new Map());
   const seqRef = useRef(2);
@@ -141,6 +152,10 @@ export default function App(): JSX.Element {
   // Whenever a workspace is opened, scan it and surface the recommended agent
   // team. Cheap, best-effort: failures just leave the card hidden.
   useEffect(() => {
+    // Fresh workspace → drop any prior AI refinement.
+    setAiReasons(null);
+    setAiBrief(null);
+    setAiDone(false);
     if (!workspace) {
       setProfile(null);
       setProfileVisible(false);
@@ -163,7 +178,7 @@ export default function App(): JSX.Element {
     (agentIds: string[]) => {
       if (!profile) return;
       setApplyingLoadout(true);
-      applyLoadout(profile.path, agentIds)
+      applyLoadout(profile.path, agentIds, aiBrief)
         .then(() => {
           setProfileVisible(false);
           showToast(
@@ -175,8 +190,39 @@ export default function App(): JSX.Element {
         })
         .finally(() => setApplyingLoadout(false));
     },
-    [profile, showToast],
+    [profile, aiBrief, showToast],
   );
+
+  const handleAiSelect = useCallback(() => {
+    if (!profile) return;
+    setAiLoading(true);
+    aiSelectTeam(profile.path)
+      .then((sel) => {
+        setProfile((p) =>
+          p
+            ? {
+                ...p,
+                agents: sel.agents.map((a) => ({
+                  id: a.id,
+                  title: a.title,
+                  description: a.description,
+                  icon: a.icon,
+                  core: a.core,
+                })),
+              }
+            : p,
+        );
+        setAiReasons(Object.fromEntries(sel.agents.map((a) => [a.id, a.reason])));
+        setAiBrief(sel.brief);
+        setAiDone(true);
+      })
+      .catch((err: unknown) => {
+        showToast(
+          `IA não montou o time: ${err instanceof Error ? err.message : String(err)}. Mantendo a seleção automática.`,
+        );
+      })
+      .finally(() => setAiLoading(false));
+  }, [profile, showToast]);
 
   // --- Claude version + auto-update ----------------------------------------
   const updateClaude = useCallback(() => {
@@ -558,6 +604,10 @@ export default function App(): JSX.Element {
         <ProfilePanel
           profile={profile}
           applying={applyingLoadout}
+          reasons={aiReasons}
+          aiLoading={aiLoading}
+          aiDone={aiDone}
+          onAiSelect={handleAiSelect}
           onApply={handleApplyLoadout}
           onDismiss={() => setProfileVisible(false)}
         />
