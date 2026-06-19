@@ -80,14 +80,16 @@ function cleanDetail(s: string): string {
 }
 
 // The "· trabalhando" pulse/label turns off this long after the last signal,
-// at which point every row settles into a checkmark. Generous on purpose:
-// Claude pauses (thinking, network) between tool calls, and a short window
-// made the state flip working->idle->working — read as a flickering count.
-const WORKING_OFF_MS = 9000;
+// at which point every row settles into a checkmark. Long enough to bridge
+// Claude's think/network pauses (which still emit a spinner) so it doesn't
+// flip working->idle->working, but no longer — when Claude is genuinely idle
+// the panel should wind down promptly.
+const WORKING_OFF_MS = 6000;
 // The panel stays MOUNTED (showing the finished run) until this long after the
-// last signal, so the routine pauses between Claude's steps don't unmount and
-// remount it — which is what made the side panel look like it kept restarting.
-const PANEL_LINGER_MS = 15000;
+// last signal, then clears entirely. Kept just above WORKING_OFF_MS so a short
+// pause doesn't unmount/remount the panel, but when the CLI really isn't being
+// used the panel disappears within a few seconds instead of lingering.
+const PANEL_LINGER_MS = 9000;
 // Coalesce emits on the hot path: the spinner animates ~10fps and each frame is
 // a fresh pty chunk, which would otherwise re-render the tree on every frame.
 const EMIT_THROTTLE_MS = 180;
