@@ -3,6 +3,7 @@ mod config;
 mod fsx;
 mod profile;
 mod pty;
+mod verify;
 
 use std::collections::HashMap;
 use std::sync::atomic::AtomicU32;
@@ -57,6 +58,10 @@ pub fn run() {
             profile::project_profile,
             profile::apply_loadout,
             profile::ai_select_team,
+            verify::git_diff,
+            verify::ai_review_diff,
+            verify::guess_test_command,
+            verify::run_check,
         ])
         .run(tauri::generate_context!())
         .expect("error running tauri app");

@@ -10,6 +10,7 @@ export interface StatusBarProps {
   updating: boolean;
   onConfigureKey: () => void;
   onUpdateClaude: () => void;
+  onVerify: () => void;
 }
 
 function baseName(p: string): string {
@@ -24,6 +25,7 @@ export default function StatusBar({
   updating,
   onConfigureKey,
   onUpdateClaude,
+  onVerify,
 }: StatusBarProps): JSX.Element {
   const provider = aiStatus?.provider ?? 'none';
   const configured = aiStatus?.configured ?? false;
@@ -55,6 +57,16 @@ export default function StatusBar({
       </div>
 
       <div className="statusbar__right">
+        {workspace && (
+          <button
+            type="button"
+            className="verify-trigger"
+            onClick={onVerify}
+            title="Verificar mudanças: revisão de IA + testes → veredito antes do commit"
+          >
+            <i className="ti ti-shield-check" aria-hidden="true" /> Verificar
+          </button>
+        )}
         {claudeInfo?.available && (
           <button
             type="button"

@@ -37,6 +37,7 @@ import CommandPalette from './ui/CommandPalette';
 import Onboarding from './ui/Onboarding';
 import AgentsPanel from './ui/AgentsPanel';
 import ProfilePanel from './ui/ProfilePanel';
+import VerifyPanel from './ui/VerifyPanel';
 import type { AgentState } from './terminal/agents';
 import {
   projectProfile,
@@ -96,6 +97,7 @@ export default function App(): JSX.Element {
   const [aiBrief, setAiBrief] = useState<ProjectBrief | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiDone, setAiDone] = useState(false);
+  const [verifyOpen, setVerifyOpen] = useState(false);
 
   const controllersRef = useRef<Map<string, TerminalController>>(new Map());
   const seqRef = useRef(2);
@@ -598,6 +600,10 @@ export default function App(): JSX.Element {
         updating={updatingClaude}
         onConfigureKey={handleConfigureKey}
         onUpdateClaude={updateClaude}
+        onVerify={() => {
+          setProfileVisible(false);
+          setVerifyOpen(true);
+        }}
       />
 
       {profileVisible && profile && (
@@ -611,6 +617,10 @@ export default function App(): JSX.Element {
           onApply={handleApplyLoadout}
           onDismiss={() => setProfileVisible(false)}
         />
+      )}
+
+      {verifyOpen && workspace && (
+        <VerifyPanel path={workspace} onClose={() => setVerifyOpen(false)} />
       )}
 
       {toast && (
