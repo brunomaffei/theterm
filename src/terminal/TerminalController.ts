@@ -117,6 +117,7 @@ export class TerminalController {
       cursorStyle: 'bar',
       allowProposedApi: true,
       scrollback: 5000,
+      smoothScrollDuration: 90,
       theme: xtermThemeFor(this.theme),
     });
 
