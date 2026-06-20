@@ -53,6 +53,7 @@ import FindBar from './ui/FindBar';
 import type { AgentState } from './terminal/agents';
 import {
   projectProfile,
+  profileApplied,
   applyLoadout,
   aiSelectTeam,
   type Profile,
@@ -504,9 +505,23 @@ export default function App(): JSX.Element {
       .then((p) => {
         if (cancelled) return;
         setProfile(p);
-        setProfileVisible(true);
-        // The card now drives the claude boot via apply/dismiss; the pending
-        // backstop stays armed so claude still boots if the card is ignored.
+        // Only nag with the prep card until the loadout is applied. After that
+        // the on-disk team (CLAUDE.md block) is enough — don't reopen it every
+        // launch. The user can reopen it on demand from the sidebar.
+        profileApplied(workspace)
+          .then((applied) => {
+            if (cancelled) return;
+            if (applied) {
+              setProfileVisible(false);
+              flushPendingBoot(); // no card to gate the boot → start claude
+            } else {
+              setProfileVisible(true);
+              // (card drives the boot via apply/dismiss; backstop stays armed)
+            }
+          })
+          .catch(() => {
+            if (!cancelled) setProfileVisible(true);
+          });
       })
       .catch(() => {
         // No card will show → boot claude so the user isn't left without it.
@@ -1092,6 +1107,8 @@ export default function App(): JSX.Element {
           onSplit={splitActive}
           onToggleAutoClaude={toggleAutoClaude}
           onManageWorktrees={() => setWorktreesOpen(true)}
+          onOpenProfile={() => profile && setProfileVisible(true)}
+          canOpenProfile={!!profile}
         />
 
         <CenterArea

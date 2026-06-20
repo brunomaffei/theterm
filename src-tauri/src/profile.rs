@@ -524,6 +524,22 @@ pub fn project_profile(path: String) -> Result<Profile, String> {
     })
 }
 
+/// True if a THETERM loadout was already applied to this project — detected by
+/// the managed CLAUDE.md block, which lives IN the project (so it persists and
+/// even travels across machines via git). The UI uses this to stop re-showing
+/// the preparation card on every launch.
+#[tauri::command]
+pub fn profile_applied(path: String) -> Result<bool, String> {
+    let dir = Path::new(&path);
+    if !dir.is_dir() {
+        return Ok(false);
+    }
+    match std::fs::read_to_string(dir.join("CLAUDE.md")) {
+        Ok(s) => Ok(s.contains(PROFILE_START)),
+        Err(_) => Ok(false),
+    }
+}
+
 /// Render the catalog as an id:description list for the AI prompt.
 fn catalog_for_prompt() -> String {
     let mut s = String::new();

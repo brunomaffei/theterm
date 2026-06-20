@@ -44,6 +44,11 @@ export async function projectProfile(path: string): Promise<Profile> {
   return invoke<Profile>('project_profile', { path });
 }
 
+/** Whether a loadout was already applied (managed CLAUDE.md block present). */
+export async function profileApplied(path: string): Promise<boolean> {
+  return invoke<boolean>('profile_applied', { path });
+}
+
 /** Ask Claude to pick the best team for this project + extract a brief. */
 export async function aiSelectTeam(path: string): Promise<TeamSelection> {
   return invoke<TeamSelection>('ai_select_team', { path });

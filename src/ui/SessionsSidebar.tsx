@@ -19,6 +19,8 @@ export interface SessionsSidebarProps {
   onSplit: (dir: 'row' | 'col') => void;
   onToggleAutoClaude: () => void;
   onManageWorktrees: () => void;
+  onOpenProfile: () => void;
+  canOpenProfile: boolean;
 }
 
 function sessionWorking(s: Session, agents: Record<string, AgentState>): boolean {
@@ -45,6 +47,8 @@ export default function SessionsSidebar({
   onSplit,
   onToggleAutoClaude,
   onManageWorktrees,
+  onOpenProfile,
+  canOpenProfile,
 }: SessionsSidebarProps): JSX.Element {
   const [creating, setCreating] = useState(false);
   const [branch, setBranch] = useState('');
@@ -61,6 +65,16 @@ export default function SessionsSidebar({
     <aside className="sessions">
       <div className="sessions__head">
         <span className="sessions__title">sessões</span>
+        <button
+          type="button"
+          className="sessions__split"
+          onClick={onOpenProfile}
+          disabled={!canOpenProfile}
+          title="Preparar agentes do projeto (equipe)"
+          aria-label="Preparar agentes do projeto"
+        >
+          <i className="ti ti-users" aria-hidden="true" />
+        </button>
         <button
           type="button"
           className="sessions__split"

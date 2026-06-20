@@ -59,6 +59,7 @@ pub fn run() {
             fsx::watch_dir,
             fsx::git_status,
             profile::project_profile,
+            profile::profile_applied,
             profile::apply_loadout,
             profile::ai_select_team,
             verify::git_diff,
