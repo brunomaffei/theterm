@@ -26,7 +26,12 @@ import {
   setExplorerCollapsed,
   getThemeId,
   setThemeId,
+  getNotifyOnDone,
+  setNotifyOnDone,
+  getAutoCheckpoint,
 } from './storage';
+import { notify, ensureNotifyPermission } from './notify/client';
+import { checkpointCreate } from './diff/client';
 import TitleBar from './ui/TitleBar';
 import ResizeHandles from './ui/ResizeHandles';
 import FileExplorer from './ui/FileExplorer';
@@ -38,6 +43,8 @@ import Onboarding from './ui/Onboarding';
 import AgentsPanel from './ui/AgentsPanel';
 import ProfilePanel from './ui/ProfilePanel';
 import VerifyPanel from './ui/VerifyPanel';
+import DiffPanel from './ui/DiffPanel';
+import FindBar from './ui/FindBar';
 import type { AgentState } from './terminal/agents';
 import {
   projectProfile,
@@ -80,6 +87,9 @@ export default function App(): JSX.Element {
 
   const [aiStatus, setAiStatus] = useState<AiStatus | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [findOpen, setFindOpen] = useState(false);
+  const [diffOpen, setDiffOpen] = useState(false);
+  const [notifyOnDone, setNotifyOnDoneState] = useState<boolean>(() => getNotifyOnDone());
   const [theme, setTheme] = useState<Theme>(() => getTheme(getThemeId()));
   const [onboardingDismissed, setOnboardingDismissed] = useState<boolean>(() => isOnboarded());
 
@@ -113,6 +123,17 @@ export default function App(): JSX.Element {
   openFilesRef.current = openFiles;
   const autoClaudeRef = useRef(autoClaude);
   autoClaudeRef.current = autoClaude;
+  const terminalsRef = useRef<TermItem[]>(terminals);
+  terminalsRef.current = terminals;
+
+  // Notification + checkpoint plumbing (all refs so handleAgents stays stable).
+  const windowFocusedRef = useRef(true);
+  const runStateRef = useRef<
+    Record<string, { working: boolean; startedAt: number; actions: number }>
+  >({});
+  const finishTimersRef = useRef<Record<string, number>>({});
+  const lastAutoCpRef = useRef(0);
+  const maybeAutoCheckpointRef = useRef<() => void>(() => {});
 
   const activeController = useCallback(
     (): TerminalController | null => controllersRef.current.get(activeTermIdRef.current) ?? null,
@@ -124,8 +145,63 @@ export default function App(): JSX.Element {
     else controllersRef.current.delete(id);
   }, []);
 
+  // Snapshot the workspace before a fresh Claude run (debounced, opt-out).
+  const maybeAutoCheckpoint = useCallback(() => {
+    const ws = workspaceRef.current;
+    if (!ws || !getAutoCheckpoint()) return;
+    const now = Date.now();
+    if (now - lastAutoCpRef.current < 90_000) return;
+    lastAutoCpRef.current = now;
+    checkpointCreate(ws, 'auto: antes da rodada').catch(() => {});
+  }, []);
+  maybeAutoCheckpointRef.current = maybeAutoCheckpoint;
+
+  // Track per-terminal Claude runs: auto-checkpoint on a fresh start, and ping a
+  // desktop notification when a run finishes while THETERM is in the background.
   const handleAgents = useCallback((id: string, state: AgentState) => {
     setAgentsByTerm((prev) => ({ ...prev, [id]: state }));
+
+    const rs = runStateRef.current;
+    const prev = rs[id];
+    const wasWorking = prev?.working ?? false;
+
+    if (state.working) {
+      // A new signal arrived — cancel any pending "finished" notification.
+      const pending = finishTimersRef.current[id];
+      if (pending) {
+        window.clearTimeout(pending);
+        delete finishTimersRef.current[id];
+      }
+      if (!wasWorking) {
+        rs[id] = { working: true, startedAt: Date.now(), actions: state.actions };
+        maybeAutoCheckpointRef.current();
+      } else {
+        rs[id] = { working: true, startedAt: prev.startedAt, actions: state.actions };
+      }
+      return;
+    }
+
+    // Idle emit: keep the latest action count.
+    if (prev) rs[id] = { ...prev, working: false, actions: state.actions };
+    if (!wasWorking) return;
+
+    // working → idle transition: schedule a "finished" notification, but only
+    // fire it if Claude stays idle (a >6s think-pause briefly flips idle too).
+    const startedAt = prev?.startedAt ?? Date.now();
+    const actions = state.actions;
+    if (finishTimersRef.current[id]) window.clearTimeout(finishTimersRef.current[id]);
+    finishTimersRef.current[id] = window.setTimeout(() => {
+      delete finishTimersRef.current[id];
+      const elapsed = Date.now() - startedAt;
+      const meaningful = actions >= 2 || elapsed >= 12_000;
+      if (getNotifyOnDone() && !windowFocusedRef.current && meaningful) {
+        const term = terminalsRef.current.find((t) => t.id === id);
+        void notify(
+          'THETERM — Claude terminou',
+          `${term?.title ?? 'Terminal'} · ${actions} ${actions === 1 ? 'ação' : 'ações'}`,
+        );
+      }
+    }, 3500);
   }, []);
 
   useEffect(() => {
@@ -144,6 +220,34 @@ export default function App(): JSX.Element {
   useEffect(() => {
     loadAiStatus();
   }, [loadAiStatus]);
+
+  // Track window focus (so we only notify when THETERM is in the background) and
+  // ask for notification permission once, up front.
+  useEffect(() => {
+    windowFocusedRef.current = document.hasFocus();
+    const onFocus = (): void => {
+      windowFocusedRef.current = true;
+    };
+    const onBlur = (): void => {
+      windowFocusedRef.current = false;
+    };
+    window.addEventListener('focus', onFocus);
+    window.addEventListener('blur', onBlur);
+    if (getNotifyOnDone()) void ensureNotifyPermission();
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('blur', onBlur);
+    };
+  }, []);
+
+  const toggleNotifyOnDone = useCallback(() => {
+    setNotifyOnDoneState((cur) => {
+      const next = !cur;
+      setNotifyOnDone(next);
+      if (next) void ensureNotifyPermission();
+      return next;
+    });
+  }, []);
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -334,6 +438,12 @@ export default function App(): JSX.Element {
       delete next[id];
       return next;
     });
+    // Drop any per-terminal run bookkeeping.
+    if (finishTimersRef.current[id]) {
+      window.clearTimeout(finishTimersRef.current[id]);
+      delete finishTimersRef.current[id];
+    }
+    delete runStateRef.current[id];
   }, []);
 
   const toggleAutoClaude = useCallback(() => {
@@ -495,6 +605,15 @@ export default function App(): JSX.Element {
         setPaletteOpen((open) => !open);
         return;
       }
+      // Ctrl/Cmd+F: terminal find bar. When a file/editor is active, let Monaco
+      // handle its own find instead of hijacking the shortcut.
+      if (mod && !e.shiftKey && (e.key === 'f' || e.key === 'F')) {
+        if (activeKindRef.current === 'term') {
+          e.preventDefault();
+          setFindOpen(true);
+        }
+        return;
+      }
       if (e.key === 'Escape' && paletteOpen) setPaletteOpen(false);
     };
     window.addEventListener('keydown', onKeyDown);
@@ -598,8 +717,15 @@ export default function App(): JSX.Element {
         workspace={workspace}
         claudeInfo={claudeInfo}
         updating={updatingClaude}
+        tokens={activeAgents?.tokens ?? null}
+        notifyOnDone={notifyOnDone}
         onConfigureKey={handleConfigureKey}
         onUpdateClaude={updateClaude}
+        onToggleNotify={toggleNotifyOnDone}
+        onDiff={() => {
+          setProfileVisible(false);
+          setDiffOpen(true);
+        }}
         onVerify={() => {
           setProfileVisible(false);
           setVerifyOpen(true);
@@ -621,6 +747,27 @@ export default function App(): JSX.Element {
 
       {verifyOpen && workspace && (
         <VerifyPanel path={workspace} onClose={() => setVerifyOpen(false)} />
+      )}
+
+      {diffOpen && workspace && (
+        <DiffPanel
+          path={workspace}
+          theme={theme}
+          showToast={showToast}
+          onClose={() => setDiffOpen(false)}
+        />
+      )}
+
+      {findOpen && activeKind === 'term' && (
+        <FindBar
+          onSearch={(term, opts) => activeController()?.search(term, opts) ?? false}
+          onClose={() => {
+            setFindOpen(false);
+            const c = activeController();
+            c?.clearSearch();
+            c?.focus();
+          }}
+        />
       )}
 
       {toast && (

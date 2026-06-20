@@ -401,6 +401,48 @@ export class TerminalController {
     void invoke('pty_write', { id: this.ptyId, data: cmd }).catch(() => {});
   }
 
+  /**
+   * Find `term` in the scrollback. Returns false when there is no match (so the
+   * find bar can show a "no results" state). Pass `{ back: true }` to search
+   * upwards. Highlights all matches using the active accent color.
+   */
+  search(term: string, opts?: { back?: boolean; caseSensitive?: boolean }): boolean {
+    if (!term) {
+      this.clearSearch();
+      return false;
+    }
+    const css = getComputedStyle(document.documentElement);
+    const accent = css.getPropertyValue('--accent').trim() || '#c5f23a';
+    const soft = css.getPropertyValue('--accent-line').trim() || 'rgba(197,242,58,0.3)';
+    const options = {
+      caseSensitive: !!opts?.caseSensitive,
+      decorations: {
+        matchBackground: soft,
+        matchBorder: soft,
+        matchOverviewRuler: accent,
+        activeMatchBackground: accent,
+        activeMatchBorder: accent,
+        activeMatchColorOverviewRuler: accent,
+      },
+    };
+    try {
+      return opts?.back
+        ? this.searchAddon.findPrevious(term, options)
+        : this.searchAddon.findNext(term, options);
+    } catch {
+      return false;
+    }
+  }
+
+  /** Clear any search highlight/decorations. */
+  clearSearch(): void {
+    try {
+      this.searchAddon.clearDecorations();
+    } catch {
+      // ignore
+    }
+  }
+
   fit(): void {
     this.safeFit();
   }

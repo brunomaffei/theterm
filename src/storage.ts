@@ -183,3 +183,41 @@ export function setExplorerCollapsed(collapsed: boolean): void {
     /* ignore */
   }
 }
+
+const NOTIFY_DONE_KEY = 'theterm.notifyOnDone';
+
+/** Desktop-notify when Claude finishes a run while unfocused (default ON). */
+export function getNotifyOnDone(): boolean {
+  try {
+    return localStorage.getItem(NOTIFY_DONE_KEY) !== '0';
+  } catch {
+    return true;
+  }
+}
+
+export function setNotifyOnDone(on: boolean): void {
+  try {
+    localStorage.setItem(NOTIFY_DONE_KEY, on ? '1' : '0');
+  } catch {
+    /* ignore */
+  }
+}
+
+const AUTO_CHECKPOINT_KEY = 'theterm.autoCheckpoint';
+
+/** Auto-snapshot the workspace before a Claude run starts (default ON). */
+export function getAutoCheckpoint(): boolean {
+  try {
+    return localStorage.getItem(AUTO_CHECKPOINT_KEY) !== '0';
+  } catch {
+    return true;
+  }
+}
+
+export function setAutoCheckpoint(on: boolean): void {
+  try {
+    localStorage.setItem(AUTO_CHECKPOINT_KEY, on ? '1' : '0');
+  } catch {
+    /* ignore */
+  }
+}

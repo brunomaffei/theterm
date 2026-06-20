@@ -1,6 +1,6 @@
 [package]
 name = "theterm"
-version = "0.4.1"
+version = "0.5.0"
 edition = "2021"
 default-run = "theterm"
 
@@ -24,4 +24,5 @@ base64 = "0.22"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "time", "io-util"] }
 tauri-plugin-dialog = "2"
+tauri-plugin-notification = "2"
 notify = "6"

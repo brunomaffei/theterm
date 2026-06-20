@@ -2513,6 +2513,7 @@ kbd {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 6px;
   padding: 8px 13px;
   border-top: 1px solid var(--border);
@@ -2520,6 +2521,8 @@ kbd {
   color: var(--text-faint);
 }
 .agents__footer .ti { font-size: 13px; color: var(--accent); }
+.agents__footer > span { display: inline-flex; align-items: center; gap: 6px; }
+.agents__tokens { color: var(--text-dim); }
 .agents__count--on { color: var(--accent); }
 
 /* ===================================================================== */
@@ -2902,3 +2905,271 @@ kbd {
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* ===================================================================== */
+/* Status bar: token meter + notification toggle                           */
+/* ===================================================================== */
+
+.statusbar__tokens {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  color: var(--text-dim);
+  font-family: var(--mono);
+}
+.statusbar__tokens .ti { font-size: 12px; color: var(--accent); }
+
+.notify-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 22px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-faint);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.notify-toggle:hover { color: var(--text); border-color: var(--border-strong); }
+.notify-toggle--on { color: var(--accent); border-color: var(--accent-line); }
+.notify-toggle .ti { font-size: 13px; }
+
+/* ===================================================================== */
+/* Terminal find bar (Ctrl/Cmd+F)                                          */
+/* ===================================================================== */
+
+.findbar {
+  position: fixed;
+  top: 78px;
+  right: 26px;
+  z-index: 340;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 6px 5px 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  animation: profile-in 0.16s ease;
+}
+.findbar__ic { font-size: 14px; color: var(--text-faint); }
+.findbar__input {
+  width: 190px;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 2px 4px;
+}
+.findbar__input:focus { outline: none; }
+.findbar__input--nomatch { color: var(--red, #f7768e); }
+.findbar__hint {
+  font-size: 10px;
+  color: var(--red, #f7768e);
+  white-space: nowrap;
+  margin-right: 2px;
+}
+.findbar__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.findbar__btn:hover { background: var(--bg-card-hover); color: var(--text); }
+.findbar__btn .ti { font-size: 14px; }
+.findbar__btn--close:hover { color: var(--red, #f7768e); }
+
+/* ===================================================================== */
+/* Changes / diff panel + checkpoints                                      */
+/* ===================================================================== */
+
+.diff-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 360;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.5);
+  animation: profile-in 0.15s ease;
+}
+.diff-modal {
+  width: min(1080px, 94vw);
+  height: min(720px, 88vh);
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-card);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius, 12px);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+}
+.diff-modal__head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.diff-modal__ic { font-size: 17px; color: var(--accent); }
+.diff-modal__title { font-size: 14px; color: var(--text); font-family: var(--display); }
+.diff-modal__sub { font-size: 11.5px; color: var(--text-dim); }
+.diff-modal__spacer { flex: 1 1 auto; }
+.diff-snap { display: inline-flex; align-items: center; gap: 6px; padding: 6px 11px; font-size: 11.5px; }
+.diff-snap .ti { font-size: 14px; }
+.diff-modal__x {
+  background: transparent;
+  border: none;
+  color: var(--text-faint);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 6px;
+}
+.diff-modal__x:hover { color: var(--text); background: var(--bg-card-hover); }
+
+.diff-modal__body { flex: 1 1 auto; min-height: 0; display: flex; }
+
+.diff-side {
+  flex: 0 0 268px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--border);
+}
+.diff-side__label {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 12px 6px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-dim);
+  font-family: var(--display);
+}
+.diff-side__label--cp { border-top: 1px solid var(--border); }
+.diff-auto {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  text-transform: none;
+  letter-spacing: 0;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.diff-auto input { accent-color: var(--accent); cursor: pointer; }
+
+.diff-files { flex: 1 1 auto; min-height: 60px; overflow-y: auto; padding: 0 6px 6px; }
+.diff-cps { flex: 0 0 auto; max-height: 38%; overflow-y: auto; padding: 0 6px 8px; }
+
+.diff-file {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 6px 8px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  cursor: pointer;
+  text-align: left;
+}
+.diff-file:hover { background: var(--bg-card-hover); }
+.diff-file--active { background: var(--accent-soft); color: var(--text); }
+.diff-file__st {
+  flex: 0 0 auto;
+  width: 15px;
+  text-align: center;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+}
+.diff-file__st.st-mod { color: var(--amber, #e0c64a); }
+.diff-file__st.st-add { color: var(--green); }
+.diff-file__st.st-del { color: var(--red, #f7768e); }
+.diff-file__st.st-ren { color: var(--accent); }
+.diff-file__st.st-new { color: var(--text-faint); }
+.diff-file__name {
+  flex: 0 1 auto;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.diff-file__dir {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 10px;
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
+
+.diff-cp {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+}
+.diff-cp:hover { background: var(--bg-card-hover); }
+.diff-cp__main { flex: 1 1 auto; min-width: 0; }
+.diff-cp__label {
+  font-size: 11.5px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.diff-cp__meta { font-size: 10px; color: var(--text-faint); }
+.diff-cp__btn {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.diff-cp__btn:hover { color: var(--accent); border-color: var(--accent-line); }
+.diff-cp__btn--del:hover { color: var(--red, #f7768e); border-color: var(--red, #f7768e); }
+.diff-cp__btn:disabled { opacity: 0.5; cursor: default; }
+.diff-cp__btn .ti { font-size: 13px; }
+
+.diff-main { flex: 1 1 auto; min-width: 0; display: flex; }
+.diff-view { flex: 1 1 auto; min-width: 0; }
+.diff-placeholder {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--text-faint);
+}
+.diff-placeholder .ti { font-size: 30px; }
+.diff-placeholder p { font-size: 12.5px; }
+.diff-empty { padding: 8px 10px; font-size: 11.5px; color: var(--text-faint); }

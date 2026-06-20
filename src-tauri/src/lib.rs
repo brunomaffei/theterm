@@ -1,4 +1,5 @@
 mod ai;
+mod checkpoints;
 mod config;
 mod fsx;
 mod profile;
@@ -37,6 +38,7 @@ impl Default for AppState {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             pty::pty_spawn,
@@ -59,9 +61,15 @@ pub fn run() {
             profile::apply_loadout,
             profile::ai_select_team,
             verify::git_diff,
+            verify::changed_files,
+            verify::file_diff,
             verify::ai_review_diff,
             verify::guess_test_command,
             verify::run_check,
+            checkpoints::checkpoint_create,
+            checkpoints::checkpoint_list,
+            checkpoints::checkpoint_restore,
+            checkpoints::checkpoint_delete,
         ])
         .run(tauri::generate_context!())
         .expect("error running tauri app");

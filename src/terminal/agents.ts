@@ -15,6 +15,12 @@ export interface AgentState {
   workers: AgentWorker[];
   actions: number;
   startedAt: number | null;
+  /**
+   * Peak Claude context-size reading seen this run (absolute token count, e.g.
+   * 99900 for "99.9k tokens"), or null if none seen. This is the live context
+   * size the CLI prints — NOT a billing/cost figure.
+   */
+  tokens: number | null;
 }
 
 interface IW extends AgentWorker {
@@ -64,6 +70,9 @@ const AGENT_LINE = /[●○◌◍◯⊙]\s+([A-Za-z][A-Za-z-]{1,20})\s{2,}([^\n]
 // Strong "Claude is working" cues independent of any tool call: the background
 // agents banner, the per-agent token counter, and the interrupt hint.
 const BG_SIGNAL = /background agents?\b|[↑↓]\s*[\d.]+\s*k?\s*tokens|esc to interrupt/i;
+// The per-agent token counter Claude right-aligns, e.g. "↓ 99.9k tokens". We
+// read the magnitude to surface a live context-size meter.
+const TOKEN_COUNT = /[↑↓]\s*([\d.]+)\s*([km])?\s*tokens/gi;
 // Task lines under "N background agents launched": "├ Find TO legend code".
 const TREE_ITEM = /[├└]\s*([A-Za-z][^\n]{2,60})/g;
 
@@ -109,6 +118,7 @@ export class ActivityDetector {
   private seq = 0;
   private working = false;
   private actions = 0;
+  private peakTokens = 0;
   private startedAt: number | null = null;
   private lastSignal = 0;
   private timer: number | null = null;
@@ -126,6 +136,18 @@ export class ActivityDetector {
 
     if (SPINNER.test(text) || BG_SIGNAL.test(text)) {
       sawSignal = true;
+    }
+
+    // Track the peak context-size reading this run (for the token meter).
+    TOKEN_COUNT.lastIndex = 0;
+    let tk: RegExpExecArray | null;
+    while ((tk = TOKEN_COUNT.exec(text))) {
+      let v = parseFloat(tk[1]);
+      if (!Number.isFinite(v)) continue;
+      const unit = (tk[2] || '').toLowerCase();
+      if (unit === 'k') v *= 1000;
+      else if (unit === 'm') v *= 1_000_000;
+      if (v > this.peakTokens) this.peakTokens = v;
     }
 
     const seen = new Set<string>();
@@ -182,6 +204,7 @@ export class ActivityDetector {
         if (this.workers.length === 0) {
           this.startedAt = Date.now();
           this.actions = 0;
+          this.peakTokens = 0;
         }
       }
       this.ensureTimer();
@@ -236,6 +259,7 @@ export class ActivityDetector {
     if (!this.working && now - this.lastSignal > PANEL_LINGER_MS) {
       if (this.workers.length > 0) {
         this.workers = [];
+        this.peakTokens = 0;
         changed = true;
       }
       if (this.timer !== null) {
@@ -277,6 +301,7 @@ export class ActivityDetector {
         })),
         actions: this.actions,
         startedAt: this.startedAt,
+        tokens: this.peakTokens > 0 ? this.peakTokens : null,
       });
     } catch {
       /* never break terminal flow */

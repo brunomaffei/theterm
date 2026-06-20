@@ -106,6 +106,123 @@ pub fn git_diff(path: String) -> Result<DiffResult, String> {
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
+pub struct ChangedFile {
+    /// Path relative to the workspace, '/'-separated.
+    pub file: String,
+    /// Simplified status: "M" | "A" | "D" | "R" | "?".
+    pub status: String,
+}
+
+/// Collapse a two-char porcelain code into a single visible status.
+fn simplify_status(code: &str) -> String {
+    if code.contains('?') {
+        "?".into()
+    } else if code.contains('D') {
+        "D".into()
+    } else if code.contains('R') || code.contains('C') {
+        "R".into()
+    } else if code.contains('A') {
+        "A".into()
+    } else {
+        "M".into()
+    }
+}
+
+/// Files changed in the workspace vs HEAD, including untracked. Returns relative
+/// ('/'-separated) paths so they pair with `file_diff`. Empty if not a repo.
+#[tauri::command]
+pub fn changed_files(path: String) -> Result<Vec<ChangedFile>, String> {
+    let dir = Path::new(&path);
+    if !dir.is_dir() {
+        return Err(format!("não é uma pasta: {path}"));
+    }
+    let out = run_git(
+        &path,
+        &[
+            "status",
+            "--porcelain=v1",
+            "-z",
+            "--untracked-files=all",
+        ],
+    )
+    .unwrap_or_default();
+
+    let mut files = Vec::new();
+    let mut fields = out.split('\0');
+    while let Some(entry) = fields.next() {
+        if entry.len() < 4 {
+            continue;
+        }
+        let bytes = entry.as_bytes();
+        let code = &entry[0..2];
+        let rel = entry[3..].to_string();
+        // Rename/copy entries carry the original path as a trailing field.
+        if bytes[0] == b'R' || bytes[0] == b'C' || bytes[1] == b'R' || bytes[1] == b'C' {
+            let _ = fields.next();
+        }
+        if rel.is_empty() {
+            continue;
+        }
+        files.push(ChangedFile {
+            file: rel,
+            status: simplify_status(code),
+        });
+    }
+    Ok(files)
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct FileDiff {
+    pub original: String,
+    pub modified: String,
+    pub binary: bool,
+}
+
+/// Largest file we feed the diff editor (protects Monaco from huge blobs).
+const MAX_FILE: usize = 400_000;
+
+/// HEAD vs working-tree content for one file. `file` is relative to `path`.
+/// Original is empty for a new file; modified is empty for a deleted file.
+#[tauri::command]
+pub fn file_diff(path: String, file: String) -> Result<FileDiff, String> {
+    let dir = Path::new(&path);
+    if !dir.is_dir() {
+        return Err(format!("não é uma pasta: {path}"));
+    }
+    let rel = file.replace('\\', "/");
+
+    // HEAD version (None when the file is new/untracked).
+    let original = run_git(&path, &["show", &format!("HEAD:{rel}")]).unwrap_or_default();
+
+    // Working-tree version (read as bytes so we can detect binary).
+    let modified_bytes = std::fs::read(dir.join(&rel)).unwrap_or_default();
+    let binary = modified_bytes.contains(&0) || original.as_bytes().contains(&0);
+
+    let mut original = if binary { String::new() } else { original };
+    let mut modified = if binary {
+        String::new()
+    } else {
+        String::from_utf8_lossy(&modified_bytes).into_owned()
+    };
+    if original.len() > MAX_FILE {
+        original.truncate(MAX_FILE);
+        original.push_str("\n… (truncado)");
+    }
+    if modified.len() > MAX_FILE {
+        modified.truncate(MAX_FILE);
+        modified.push_str("\n… (truncado)");
+    }
+
+    Ok(FileDiff {
+        original,
+        modified,
+        binary,
+    })
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct Finding {
     /// "bug" | "risk" | "nit"
     pub severity: String,

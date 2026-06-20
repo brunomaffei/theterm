@@ -45,6 +45,13 @@ function iconFor(tool: string): string {
   return ICONS[tool] ?? 'ti-tool';
 }
 
+/** "99.9k" / "1.2M" style compact token count. */
+function fmtTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1000) return `${(n / 1000).toFixed(n >= 10_000 ? 0 : 1)}k`;
+  return String(Math.round(n));
+}
+
 function labelFor(tool: string): string {
   return LABELS[tool] ?? tool;
 }
@@ -108,8 +115,15 @@ export default function AgentsPanel({ state }: { state: AgentState }): JSX.Eleme
       </div>
 
       <div className="agents__footer">
-        <i className="ti ti-bolt" aria-hidden="true" /> {state.actions}{' '}
-        {state.actions === 1 ? 'ação' : 'ações'}
+        <span>
+          <i className="ti ti-bolt" aria-hidden="true" /> {state.actions}{' '}
+          {state.actions === 1 ? 'ação' : 'ações'}
+        </span>
+        {state.tokens != null && (
+          <span className="agents__tokens" title="Tamanho de contexto da sessão (não é custo)">
+            <i className="ti ti-clock-hour-4" aria-hidden="true" /> {fmtTokens(state.tokens)} tok
+          </span>
+        )}
       </div>
     </aside>
   );
