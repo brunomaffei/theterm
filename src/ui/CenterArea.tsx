@@ -7,27 +7,38 @@ import type { Theme } from '../theme';
 import type { TerminalController } from '../terminal/TerminalController';
 import type { AgentState } from '../terminal/agents';
 
-export interface TermItem {
+/** A terminal pane (leaf of a session's split). Its id is also its terminal id. */
+export interface Pane {
   id: string;
-  title: string;
   cwd?: string;
   boot?: string;
 }
 
-export type ActiveTab = { kind: 'term'; id: string } | { kind: 'file'; path: string };
+/** A session = one tab in the sidebar; may hold several panes split row/col. */
+export interface Session {
+  id: string;
+  title: string;
+  cwd?: string;
+  branch?: string;
+  worktreeDir?: string;
+  panes: Pane[];
+  splitDir: 'row' | 'col';
+  activePaneId: string;
+}
+
+export type ActiveTab = { kind: 'term' } | { kind: 'file'; path: string };
 
 export interface CenterAreaProps {
-  terminals: TermItem[];
+  sessions: Session[];
+  activeSessionId: string;
+  activeKind: 'term' | 'file';
   files: OpenFile[];
-  active: ActiveTab;
+  activeFilePath: string | null;
   theme: Theme;
-  autoClaude: boolean;
-  onSelectTerm: (id: string) => void;
-  onNewTerm: () => void;
-  onCloseTerm: (id: string) => void;
   onSelectFile: (path: string) => void;
   onCloseFile: (path: string) => void;
-  onToggleAutoClaude: () => void;
+  onSelectPane: (sessionId: string, paneId: string) => void;
+  onClosePane: (sessionId: string, paneId: string) => void;
   registerController: (id: string, controller: TerminalController | null) => void;
   onAgents: (id: string, state: AgentState) => void;
   onEditorChange: (path: string, value: string) => void;
@@ -47,131 +58,107 @@ function CloseX({ label, onClick }: { label: string; onClick: (e: React.MouseEve
 }
 
 /**
- * Terminal-first workbench: ONE big content area. Terminals and open files are
- * tabs in a single strip; the terminal fills the whole area (never cramped).
- * Clicking a file opens an editor tab alongside the terminal tab.
+ * Content workbench: renders each session's pane layout (the active one visible,
+ * others mounted-but-hidden to keep scrollback) plus the Monaco editor when a
+ * file tab is active. Session navigation lives in the sidebar; only open files
+ * get a horizontal tab strip here.
  */
 export default function CenterArea({
-  terminals,
+  sessions,
+  activeSessionId,
+  activeKind,
   files,
-  active,
+  activeFilePath,
   theme,
-  autoClaude,
-  onSelectTerm,
-  onNewTerm,
-  onCloseTerm,
   onSelectFile,
   onCloseFile,
-  onToggleAutoClaude,
+  onSelectPane,
+  onClosePane,
   registerController,
   onAgents,
   onEditorChange,
   onEditorSave,
 }: CenterAreaProps): JSX.Element {
-  const activeFile =
-    active.kind === 'file' ? files.find((f) => f.path === active.path) ?? null : null;
+  // Keep the editor mounted whenever a file is open (toggle display) so its
+  // cursor/scroll survive switching between the terminal and the editor.
+  const activeFile = activeFilePath
+    ? files.find((f) => f.path === activeFilePath) ?? null
+    : null;
 
   return (
     <div className="center">
-      <div className="wb-tabs">
-        {terminals.map((t) => (
-          <div
-            key={t.id}
-            className={`wb-tab wb-tab--term ${active.kind === 'term' && active.id === t.id ? 'wb-tab--active' : ''}`}
-            onClick={() => onSelectTerm(t.id)}
-            title={t.title}
-          >
-            <i className="ti ti-terminal-2 wb-tab__icon" aria-hidden="true" />
-            <span className="wb-tab__label">{t.title}</span>
-            {terminals.length > 1 && (
+      {files.length > 0 && (
+        <div className="wb-tabs">
+          {files.map((f) => (
+            <div
+              key={f.path}
+              className={`wb-tab wb-tab--file ${
+                activeKind === 'file' && activeFilePath === f.path ? 'wb-tab--active' : ''
+              }`}
+              onClick={() => onSelectFile(f.path)}
+              title={f.path}
+            >
+              {f.dirty ? (
+                <span className="wb-tab__dirty" aria-hidden="true" />
+              ) : (
+                <i className="ti ti-file wb-tab__icon" aria-hidden="true" />
+              )}
+              <span className="wb-tab__label">{f.name}</span>
               <CloseX
-                label={`Fechar ${t.title}`}
+                label={`Fechar ${f.name}`}
                 onClick={(e) => {
                   e.stopPropagation();
-                  onCloseTerm(t.id);
+                  onCloseFile(f.path);
                 }}
               />
-            )}
-          </div>
-        ))}
-
-        <button
-          type="button"
-          className="wb-newterm"
-          onClick={onNewTerm}
-          title={autoClaude ? 'Novo terminal (abre no Claude)' : 'Novo terminal'}
-          aria-label="Novo terminal"
-        >
-          <svg width="13" height="13" viewBox="0 0 13 13" stroke="currentColor" strokeWidth="1.3">
-            <path d="M6.5 2 V11 M2 6.5 H11" />
-          </svg>
-        </button>
-
-        {files.length > 0 && <span className="wb-tabs__sep" aria-hidden="true" />}
-
-        {files.map((f) => (
-          <div
-            key={f.path}
-            className={`wb-tab wb-tab--file ${active.kind === 'file' && active.path === f.path ? 'wb-tab--active' : ''}`}
-            onClick={() => onSelectFile(f.path)}
-            title={f.path}
-          >
-            {f.dirty ? (
-              <span className="wb-tab__dirty" aria-hidden="true" />
-            ) : (
-              <i className="ti ti-file wb-tab__icon" aria-hidden="true" />
-            )}
-            <span className="wb-tab__label">{f.name}</span>
-            <CloseX
-              label={`Fechar ${f.name}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                onCloseFile(f.path);
-              }}
-            />
-          </div>
-        ))}
-
-        <button
-          type="button"
-          className={`wb-autoclaude ${autoClaude ? 'wb-autoclaude--on' : ''}`}
-          onClick={onToggleAutoClaude}
-          title={
-            autoClaude
-              ? 'Auto-Claude ligado: novas abas abrem no Claude. Clique para desligar.'
-              : 'Auto-Claude desligado: novas abas são shell. Clique para ligar.'
-          }
-        >
-          <i className="ti ti-sparkles" aria-hidden="true" />
-          auto-claude {autoClaude ? 'on' : 'off'}
-        </button>
-      </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="wb-content">
-        {terminals.map((t) => (
-          <TerminalView
-            key={t.id}
-            id={t.id}
-            active={active.kind === 'term' && active.id === t.id}
-            initialTheme={theme}
-            cwd={t.cwd}
-            boot={t.boot}
-            onBlocks={NOOP_BLOCKS}
-            onAgents={onAgents}
-            registerController={registerController}
-          />
-        ))}
+        {sessions.map((s) => {
+          const sessionVisible = activeKind === 'term' && s.id === activeSessionId;
+          const closable = s.panes.length > 1;
+          return (
+            <div
+              key={s.id}
+              className={`panes panes--${s.splitDir} ${closable ? 'panes--split' : ''}`}
+              style={{ display: sessionVisible ? 'flex' : 'none' }}
+            >
+              {s.panes.map((p) => (
+                <TerminalView
+                  key={p.id}
+                  id={p.id}
+                  visible={sessionVisible}
+                  focused={sessionVisible && p.id === s.activePaneId}
+                  closable={closable}
+                  initialTheme={theme}
+                  cwd={p.cwd}
+                  boot={p.boot}
+                  onBlocks={NOOP_BLOCKS}
+                  onAgents={onAgents}
+                  registerController={registerController}
+                  onFocusRequest={(pid) => onSelectPane(s.id, pid)}
+                  onClose={() => onClosePane(s.id, p.id)}
+                />
+              ))}
+            </div>
+          );
+        })}
 
         {activeFile && (
-          <MonacoEditor
-            key="wb-editor"
-            path={activeFile.path}
-            value={activeFile.content}
-            language={activeFile.language}
-            theme={theme}
-            onChange={(v) => onEditorChange(activeFile.path, v)}
-            onSave={() => onEditorSave(activeFile.path)}
-          />
+          <div className="wb-editor-wrap" style={{ display: activeKind === 'file' ? 'flex' : 'none' }}>
+            <MonacoEditor
+              key="wb-editor"
+              path={activeFile.path}
+              value={activeFile.content}
+              language={activeFile.language}
+              theme={theme}
+              onChange={(v) => onEditorChange(activeFile.path, v)}
+              onSave={() => onEditorSave(activeFile.path)}
+            />
+          </div>
         )}
       </div>
     </div>

@@ -6,29 +6,42 @@ import type { Theme } from '../theme';
 
 export interface TerminalViewProps {
   id: string;
-  active: boolean;
+  /** Whether this pane's session is the visible one (controls display). */
+  visible: boolean;
+  /** Whether this is the focused pane within the visible session. */
+  focused: boolean;
   initialTheme: Theme;
   cwd?: string;
   boot?: string;
   onBlocks: (id: string, blocks: Block[]) => void;
   onAgents?: (id: string, state: AgentState) => void;
   registerController: (id: string, controller: TerminalController | null) => void;
+  /** Notify the parent that this pane was clicked (so it becomes the active pane). */
+  onFocusRequest?: (id: string) => void;
+  /** Show a close control (only when the session has more than one pane). */
+  closable?: boolean;
+  onClose?: () => void;
 }
 
 /**
- * One xterm-backed terminal. Owns its TerminalController, registers it with the
- * parent (so the active one can be driven), and stays mounted but hidden when
- * inactive so its shell/scrollback survive tab switches.
+ * One xterm-backed terminal pane. Owns its TerminalController, registers it with
+ * the parent, and stays mounted but hidden when its session isn't visible so its
+ * shell/scrollback survive session switches. Sizing is automatic (the controller
+ * watches the host with a ResizeObserver), so splits just work.
  */
 export default function TerminalView({
   id,
-  active,
+  visible,
+  focused,
   initialTheme,
   cwd,
   boot,
   onBlocks,
   onAgents,
   registerController,
+  onFocusRequest,
+  closable,
+  onClose,
 }: TerminalViewProps): JSX.Element {
   const hostRef = useRef<HTMLDivElement>(null);
   const ctrlRef = useRef<TerminalController | null>(null);
@@ -59,23 +72,42 @@ export default function TerminalView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // When this pane becomes visible/focused, fit + focus once the layout settles.
   useEffect(() => {
-    if (!active) return;
+    if (!visible) return;
     const c = ctrlRef.current;
     if (!c) return;
-    // Let the now-visible layout settle, then size + focus.
     const raf = requestAnimationFrame(() => {
       c.fit();
-      c.focus();
+      if (focused) c.focus();
     });
     return () => cancelAnimationFrame(raf);
-  }, [active]);
+  }, [visible, focused]);
 
   return (
     <div
-      ref={hostRef}
-      className="xterm-host"
-      style={{ display: active ? 'block' : 'none' }}
-    />
+      className={`xterm-pane ${focused ? 'xterm-pane--focused' : ''}`}
+      style={{ display: visible ? 'flex' : 'none' }}
+      onMouseDown={() => onFocusRequest?.(id)}
+    >
+      {closable && (
+        <button
+          type="button"
+          className="xterm-pane__close"
+          title="Fechar painel"
+          aria-label="Fechar painel"
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            onClose?.();
+          }}
+        >
+          <svg width="9" height="9" viewBox="0 0 9 9" stroke="currentColor" strokeWidth="1.2">
+            <path d="M1 1 L8 8 M8 1 L1 8" />
+          </svg>
+        </button>
+      )}
+      <div ref={hostRef} className="xterm-host" />
+    </div>
   );
 }

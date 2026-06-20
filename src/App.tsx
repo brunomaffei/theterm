@@ -32,10 +32,12 @@ import {
 } from './storage';
 import { notify, ensureNotifyPermission } from './notify/client';
 import { checkpointCreate } from './diff/client';
+import { worktreeCreate } from './worktrees/client';
 import TitleBar from './ui/TitleBar';
 import ResizeHandles from './ui/ResizeHandles';
 import FileExplorer from './ui/FileExplorer';
-import CenterArea, { type ActiveTab, type TermItem } from './ui/CenterArea';
+import CenterArea, { type Session } from './ui/CenterArea';
+import SessionsSidebar from './ui/SessionsSidebar';
 import { languageForPath, type OpenFile } from './ui/EditorArea';
 import StatusBar from './ui/StatusBar';
 import CommandPalette from './ui/CommandPalette';
@@ -70,15 +72,24 @@ export default function App(): JSX.Element {
 
   const [autoClaude, setAutoClaudeState] = useState<boolean>(() => getAutoClaude());
 
-  const [terminals, setTerminals] = useState<TermItem[]>(() => [
+  const [sessions, setSessions] = useState<Session[]>(() => [
     {
-      id: 't1',
-      title: 'Terminal 1',
+      id: 's1',
+      title: 'Sessão 1',
       cwd: initialWorkspace ?? undefined,
-      boot: getAutoClaude() && !deferInitialClaude ? 'claude' : undefined,
+      panes: [
+        {
+          id: 't1',
+          cwd: initialWorkspace ?? undefined,
+          boot: getAutoClaude() && !deferInitialClaude ? 'claude' : undefined,
+        },
+      ],
+      splitDir: 'row',
+      activePaneId: 't1',
     },
   ]);
-  const [activeTermId, setActiveTermId] = useState('t1');
+  const [activeSessionId, setActiveSessionId] = useState('s1');
+  const [attention, setAttention] = useState<Record<string, boolean>>({});
   const [activeFilePath, setActiveFilePath] = useState<string | null>(null);
   const [activeKind, setActiveKind] = useState<'term' | 'file'>('term');
   const [workspace, setWorkspace] = useState<string | null>(initialWorkspace);
@@ -114,12 +125,19 @@ export default function App(): JSX.Element {
   const [aiDone, setAiDone] = useState(false);
   const [verifyOpen, setVerifyOpen] = useState(false);
 
+  // Derived: the active session and its focused pane (terminal) id.
+  const activeSession = sessions.find((s) => s.id === activeSessionId) ?? sessions[0];
+  const activePaneId = activeSession?.activePaneId ?? null;
+
   const controllersRef = useRef<Map<string, TerminalController>>(new Map());
-  const seqRef = useRef(2);
+  const seqRef = useRef(2); // pane (terminal) id counter
+  const sessionSeqRef = useRef(2); // session id counter
   const workspaceRef = useRef<string | null>(null);
   workspaceRef.current = workspace;
-  const activeTermIdRef = useRef(activeTermId);
-  activeTermIdRef.current = activeTermId;
+  const activeSessionIdRef = useRef(activeSessionId);
+  activeSessionIdRef.current = activeSessionId;
+  const activePaneIdRef = useRef<string | null>(activePaneId);
+  activePaneIdRef.current = activePaneId;
   const activeKindRef = useRef(activeKind);
   activeKindRef.current = activeKind;
   const activeFileRef = useRef<string | null>(null);
@@ -128,8 +146,8 @@ export default function App(): JSX.Element {
   openFilesRef.current = openFiles;
   const autoClaudeRef = useRef(autoClaude);
   autoClaudeRef.current = autoClaude;
-  const terminalsRef = useRef<TermItem[]>(terminals);
-  terminalsRef.current = terminals;
+  const sessionsRef = useRef<Session[]>(sessions);
+  sessionsRef.current = sessions;
 
   // Notification + checkpoint plumbing (all refs so handleAgents stays stable).
   const windowFocusedRef = useRef(true);
@@ -147,13 +165,30 @@ export default function App(): JSX.Element {
   const safetyTimerRef = useRef<number | null>(null);
 
   const activeController = useCallback(
-    (): TerminalController | null => controllersRef.current.get(activeTermIdRef.current) ?? null,
+    (): TerminalController | null =>
+      activePaneIdRef.current ? controllersRef.current.get(activePaneIdRef.current) ?? null : null,
     [],
   );
 
   const registerController = useCallback((id: string, c: TerminalController | null) => {
     if (c) controllersRef.current.set(id, c);
     else controllersRef.current.delete(id);
+  }, []);
+
+  // Forget a pane's per-run bookkeeping (agents state, finish timer, run state).
+  const cleanupPane = useCallback((id: string) => {
+    setAgentsByTerm((prev) => {
+      if (!(id in prev)) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    const ft = finishTimersRef.current[id];
+    if (ft) {
+      window.clearTimeout(ft);
+      delete finishTimersRef.current[id];
+    }
+    delete runStateRef.current[id];
   }, []);
 
   // Snapshot the workspace before a fresh Claude run (debounced, opt-out).
@@ -205,11 +240,22 @@ export default function App(): JSX.Element {
       delete finishTimersRef.current[id];
       const elapsed = Date.now() - startedAt;
       const meaningful = actions >= 2 || elapsed >= 12_000;
-      if (getNotifyOnDone() && !windowFocusedRef.current && meaningful) {
-        const term = terminalsRef.current.find((t) => t.id === id);
+      if (!meaningful) return;
+      // Which session owns this pane?
+      const session = sessionsRef.current.find((s) => s.panes.some((p) => p.id === id));
+      const isActive =
+        !!session &&
+        session.id === activeSessionIdRef.current &&
+        activeKindRef.current === 'term';
+      // Ring the sidebar when a background session finishes.
+      if (session && !isActive) {
+        setAttention((prevA) => (prevA[session.id] ? prevA : { ...prevA, [session.id]: true }));
+      }
+      // Desktop notification when THETERM is unfocused.
+      if (getNotifyOnDone() && !windowFocusedRef.current) {
         void notify(
           'THETERM — Claude terminou',
-          `${term?.title ?? 'Terminal'} · ${actions} ${actions === 1 ? 'ação' : 'ações'}`,
+          `${session?.title ?? 'Sessão'} · ${actions} ${actions === 1 ? 'ação' : 'ações'}`,
         );
       }
     }, 3500);
@@ -356,41 +402,41 @@ export default function App(): JSX.Element {
   // applied agent loadout is picked up without the user restarting it by hand.
   // Swapping the terminal's id forces React to remount it: the old PTY (and its
   // claude) is disposed and a new one boots `claude` from scratch.
-  const rebootClaude = useCallback((cwd?: string) => {
-    const targetId = activeTermIdRef.current;
-    const dir = cwd ?? workspaceRef.current ?? undefined;
-    // The new terminal boots claude via its boot prop, so cancel any pending
-    // deferred boot for the one we're replacing.
-    if (pendingBootRef.current === targetId) pendingBootRef.current = null;
-    if (safetyTimerRef.current !== null) {
-      window.clearTimeout(safetyTimerRef.current);
-      safetyTimerRef.current = null;
-    }
-    const n = seqRef.current;
-    seqRef.current += 1;
-    const newId = `t${n}`;
-    setTerminals((prev) => {
-      if (!prev.some((t) => t.id === targetId)) return prev;
-      return prev.map((t) =>
-        t.id === targetId ? { id: newId, title: t.title, cwd: dir ?? t.cwd, boot: 'claude' } : t,
+  const rebootClaude = useCallback(
+    (cwd?: string) => {
+      const sid = activeSessionIdRef.current;
+      const session = sessionsRef.current.find((s) => s.id === sid);
+      if (!session) return;
+      const targetPane = session.activePaneId;
+      const dir = cwd ?? session.cwd ?? workspaceRef.current ?? undefined;
+      // The replacement pane boots claude via its boot prop, so cancel any
+      // pending deferred boot for the one we're replacing.
+      if (pendingBootRef.current === targetPane) pendingBootRef.current = null;
+      if (safetyTimerRef.current !== null) {
+        window.clearTimeout(safetyTimerRef.current);
+        safetyTimerRef.current = null;
+      }
+      const n = seqRef.current;
+      seqRef.current += 1;
+      const newId = `t${n}`;
+      setSessions((prev) =>
+        prev.map((s) =>
+          s.id !== sid
+            ? s
+            : {
+                ...s,
+                panes: s.panes.map((p) =>
+                  p.id === targetPane ? { id: newId, cwd: dir, boot: 'claude' } : p,
+                ),
+                activePaneId: s.activePaneId === targetPane ? newId : s.activePaneId,
+              },
+        ),
       );
-    });
-    setActiveTermId((cur) => (cur === targetId ? newId : cur));
-    setActiveKind('term');
-    // Drop the old terminal's run bookkeeping.
-    setAgentsByTerm((prev) => {
-      if (!(targetId in prev)) return prev;
-      const next = { ...prev };
-      delete next[targetId];
-      return next;
-    });
-    const ft = finishTimersRef.current[targetId];
-    if (ft) {
-      window.clearTimeout(ft);
-      delete finishTimersRef.current[targetId];
-    }
-    delete runStateRef.current[targetId];
-  }, []);
+      setActiveKind('term');
+      cleanupPane(targetPane);
+    },
+    [cleanupPane],
+  );
 
   const handleApplyLoadout = useCallback(
     (agentIds: string[]) => {
@@ -520,50 +566,157 @@ export default function App(): JSX.Element {
     };
   }, []);
 
-  // --- Terminals -----------------------------------------------------------
-  const addTerminal = useCallback(
-    (cwd?: string, opts?: { deferClaude?: boolean }) => {
-      const n = seqRef.current;
+  // --- Sessions & panes ----------------------------------------------------
+  // A session is one sidebar entry; it holds one or more terminal panes (a
+  // single-direction split). Pane ids ARE terminal ids.
+  const addSession = useCallback(
+    (opts?: {
+      cwd?: string;
+      deferClaude?: boolean;
+      forceClaude?: boolean;
+      branch?: string;
+      worktreeDir?: string;
+    }) => {
+      const sn = sessionSeqRef.current;
+      sessionSeqRef.current += 1;
+      const pn = seqRef.current;
       seqRef.current += 1;
-      const id = `t${n}`;
-      const dir = cwd ?? workspaceRef.current ?? undefined;
-      const wantClaude = autoClaudeRef.current;
+      const sid = `s${sn}`;
+      const pid = `t${pn}`;
+      const dir = opts?.cwd ?? workspaceRef.current ?? undefined;
+      const wantClaude = autoClaudeRef.current || !!opts?.forceClaude;
       const defer = wantClaude && !!opts?.deferClaude;
       const boot = wantClaude && !defer ? 'claude' : undefined;
-      setTerminals((prev) => [...prev, { id, title: `Terminal ${n}`, cwd: dir, boot }]);
-      setActiveTermId(id);
+      const title = opts?.branch ? `Agente ${sn}` : `Sessão ${sn}`;
+      setSessions((prev) => [
+        ...prev,
+        {
+          id: sid,
+          title,
+          cwd: dir,
+          branch: opts?.branch,
+          worktreeDir: opts?.worktreeDir,
+          panes: [{ id: pid, cwd: dir, boot }],
+          splitDir: 'row',
+          activePaneId: pid,
+        },
+      ]);
+      setActiveSessionId(sid);
       setActiveKind('term');
-      if (defer) armPendingBoot(id);
+      if (defer) armPendingBoot(pid);
     },
     [armPendingBoot],
   );
 
-  const selectTerm = useCallback((id: string) => {
-    setActiveTermId(id);
+  const selectSession = useCallback((id: string) => {
+    setActiveSessionId(id);
+    setActiveKind('term');
+    setAttention((prev) => (prev[id] ? { ...prev, [id]: false } : prev));
+  }, []);
+
+  const selectPane = useCallback((sessionId: string, paneId: string) => {
+    // No-op when clicking the already-focused pane (avoids churn on every click).
+    if (
+      activeSessionIdRef.current === sessionId &&
+      activeKindRef.current === 'term'
+    ) {
+      const s = sessionsRef.current.find((x) => x.id === sessionId);
+      if (s && s.activePaneId === paneId) return;
+    }
+    setSessions((prev) =>
+      prev.map((s) => (s.id === sessionId ? { ...s, activePaneId: paneId } : s)),
+    );
+    setActiveSessionId(sessionId);
     setActiveKind('term');
   }, []);
 
-  const closeTerminal = useCallback((id: string) => {
-    setTerminals((prev) => {
-      if (prev.length <= 1) return prev;
-      const idx = prev.findIndex((t) => t.id === id);
-      const next = prev.filter((t) => t.id !== id);
-      setActiveTermId((cur) => (cur === id ? (next[Math.max(0, idx - 1)] ?? next[0]).id : cur));
-      return next;
-    });
-    setAgentsByTerm((prev) => {
-      if (!(id in prev)) return prev;
-      const next = { ...prev };
-      delete next[id];
-      return next;
-    });
-    // Drop any per-terminal run bookkeeping.
-    if (finishTimersRef.current[id]) {
-      window.clearTimeout(finishTimersRef.current[id]);
-      delete finishTimersRef.current[id];
-    }
-    delete runStateRef.current[id];
+  // Split the active session into another pane (a plain shell — handy for logs/
+  // tests beside a running claude). Switches the layout direction to `dir`.
+  const splitActive = useCallback((dir: 'row' | 'col') => {
+    const pn = seqRef.current;
+    seqRef.current += 1;
+    const pid = `t${pn}`;
+    setSessions((prev) =>
+      prev.map((s) =>
+        s.id !== activeSessionIdRef.current
+          ? s
+          : {
+              ...s,
+              splitDir: dir,
+              panes: [...s.panes, { id: pid, cwd: s.cwd, boot: undefined }],
+              activePaneId: pid,
+            },
+      ),
+    );
+    setActiveKind('term');
   }, []);
+
+  const closeSession = useCallback(
+    (id: string) => {
+      const s = sessionsRef.current.find((x) => x.id === id);
+      setSessions((prev) => {
+        if (prev.length <= 1) return prev;
+        const idx = prev.findIndex((x) => x.id === id);
+        const next = prev.filter((x) => x.id !== id);
+        setActiveSessionId((cur) =>
+          cur === id ? (next[Math.max(0, idx - 1)] ?? next[0]).id : cur,
+        );
+        return next;
+      });
+      if (s && sessionsRef.current.length > 1) s.panes.forEach((p) => cleanupPane(p.id));
+      setAttention((prev) => {
+        if (!(id in prev)) return prev;
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+    },
+    [cleanupPane],
+  );
+
+  const closePane = useCallback(
+    (sessionId: string, paneId: string) => {
+      const s = sessionsRef.current.find((x) => x.id === sessionId);
+      if (!s) return;
+      if (s.panes.length <= 1) {
+        closeSession(sessionId);
+        return;
+      }
+      const idx = s.panes.findIndex((p) => p.id === paneId);
+      setSessions((prev) =>
+        prev.map((x) => {
+          if (x.id !== sessionId) return x;
+          const panes = x.panes.filter((p) => p.id !== paneId);
+          const activePaneId =
+            x.activePaneId === paneId ? (panes[Math.max(0, idx - 1)] ?? panes[0]).id : x.activePaneId;
+          return { ...x, panes, activePaneId };
+        }),
+      );
+      cleanupPane(paneId);
+    },
+    [closeSession, cleanupPane],
+  );
+
+  // Spawn an isolated worktree agent: a fresh branch + directory tree where its
+  // own claude can work in parallel without touching the main checkout.
+  const newAgent = useCallback(
+    (branch: string) => {
+      const ws = workspaceRef.current;
+      if (!ws) {
+        showToast('Abra um projeto git para criar um agente.');
+        return;
+      }
+      worktreeCreate(ws, branch)
+        .then((wt) => {
+          addSession({ cwd: wt.dir, branch: wt.branch, worktreeDir: wt.dir, forceClaude: true });
+          showToast(`Worktree '${wt.branch}' criado. Claude iniciando…`);
+        })
+        .catch((e: unknown) =>
+          showToast(`Falha ao criar o worktree: ${e instanceof Error ? e.message : String(e)}`),
+        );
+    },
+    [addSession, showToast],
+  );
 
   const toggleAutoClaude = useCallback(() => {
     setAutoClaudeState((cur) => {
@@ -581,10 +734,10 @@ export default function App(): JSX.Element {
         setLastWorkspace(path);
         // Defer the claude boot: the Profiler will show for the new workspace,
         // and applying it restarts claude with the agents (no double-boot).
-        addTerminal(path, { deferClaude: true });
+        addSession({ cwd: path, deferClaude: true });
       })
       .catch(() => {});
-  }, [addTerminal]);
+  }, [addSession]);
 
   const startResize = useCallback(
     (e: React.MouseEvent) => {
@@ -706,7 +859,15 @@ export default function App(): JSX.Element {
       const mod = e.ctrlKey || e.metaKey;
       if (mod && e.shiftKey && (e.key === 'T' || e.key === 't')) {
         e.preventDefault();
-        addTerminal();
+        addSession();
+        return;
+      }
+      // Ctrl/Cmd+Shift+D: split the active session into another pane.
+      if (mod && e.shiftKey && (e.key === 'D' || e.key === 'd')) {
+        if (activeKindRef.current === 'term') {
+          e.preventDefault();
+          splitActive('row');
+        }
         return;
       }
       if (mod && !e.shiftKey && (e.key === 's' || e.key === 'S')) {
@@ -739,24 +900,14 @@ export default function App(): JSX.Element {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [paletteOpen, addTerminal, openFolder, saveFile]);
+  }, [paletteOpen, addSession, splitActive, openFolder, saveFile]);
 
-  const activeAgents = agentsByTerm[activeTermId];
+  const activeAgents = activePaneId ? agentsByTerm[activePaneId] : undefined;
   const showAgents =
     !!activeAgents && (activeAgents.working || activeAgents.workers.length > 0);
 
-  useEffect(() => {
-    activeController()?.fit();
-  }, [
-    paletteOpen,
-    workspace,
-    activeKind,
-    activeTermId,
-    explorerWidth,
-    explorerCollapsed,
-    showAgents,
-    activeController,
-  ]);
+  // Pane sizing is automatic (the controller's ResizeObserver), so no manual
+  // fit() wiring is needed on layout changes here.
 
   const handleConfigureKey = useCallback(() => setPaletteOpen(true), []);
 
@@ -769,11 +920,6 @@ export default function App(): JSX.Element {
     },
     [activeController],
   );
-
-  const active: ActiveTab =
-    activeKind === 'file' && activeFilePath
-      ? { kind: 'file', path: activeFilePath }
-      : { kind: 'term', id: activeTermId };
 
   const showOnboarding =
     aiStatus !== null && !aiStatus.configured && !onboardingDismissed;
@@ -812,18 +958,33 @@ export default function App(): JSX.Element {
           </>
         )}
 
-        <CenterArea
-          terminals={terminals}
-          files={openFiles}
-          active={active}
-          theme={theme}
+        <SessionsSidebar
+          sessions={sessions}
+          activeSessionId={activeSessionId}
+          activeKind={activeKind}
+          agentsByPane={agentsByTerm}
+          attention={attention}
           autoClaude={autoClaude}
-          onSelectTerm={selectTerm}
-          onNewTerm={() => addTerminal()}
-          onCloseTerm={closeTerminal}
+          hasWorkspace={!!workspace}
+          onSelectSession={selectSession}
+          onCloseSession={closeSession}
+          onNewTerminal={() => addSession()}
+          onNewAgent={newAgent}
+          onSplit={splitActive}
+          onToggleAutoClaude={toggleAutoClaude}
+        />
+
+        <CenterArea
+          sessions={sessions}
+          activeSessionId={activeSessionId}
+          activeKind={activeKind}
+          files={openFiles}
+          activeFilePath={activeFilePath}
+          theme={theme}
           onSelectFile={selectFile}
           onCloseFile={closeFile}
-          onToggleAutoClaude={toggleAutoClaude}
+          onSelectPane={selectPane}
+          onClosePane={closePane}
           registerController={registerController}
           onAgents={handleAgents}
           onEditorChange={editorChange}

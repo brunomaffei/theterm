@@ -5,6 +5,7 @@ mod fsx;
 mod profile;
 mod pty;
 mod verify;
+mod worktrees;
 
 use std::collections::HashMap;
 use std::sync::atomic::AtomicU32;
@@ -70,6 +71,10 @@ pub fn run() {
             checkpoints::checkpoint_list,
             checkpoints::checkpoint_restore,
             checkpoints::checkpoint_delete,
+            worktrees::worktree_create,
+            worktrees::worktree_list,
+            worktrees::worktree_remove,
+            worktrees::worktree_merge,
         ])
         .run(tauri::generate_context!())
         .expect("error running tauri app");

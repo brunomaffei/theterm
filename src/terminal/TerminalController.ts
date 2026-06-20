@@ -10,6 +10,7 @@ import type { IDisposable, IMarker } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { SearchAddon } from '@xterm/addon-search';
+import { WebglAddon } from '@xterm/addon-webgl';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { UnlistenFn } from '@tauri-apps/api/event';
@@ -84,6 +85,7 @@ export class TerminalController {
   private fitAddon: FitAddon;
   private searchAddon: SearchAddon;
   private webLinksAddon: WebLinksAddon;
+  private webglAddon: WebglAddon | null = null;
 
   private theme: Theme;
   private readonly cwd: string | null;
@@ -100,6 +102,8 @@ export class TerminalController {
   private disposables: IDisposable[] = [];
   private unlisteners: UnlistenFn[] = [];
   private onWindowResize = () => this.fit();
+  private resizeObserver: ResizeObserver | null = null;
+  private resizeRaf = 0;
 
   constructor(opts: TerminalControllerOptions) {
     this.container = opts.container;
@@ -136,6 +140,7 @@ export class TerminalController {
     this.term.loadAddon(this.fitAddon);
     this.term.loadAddon(this.searchAddon);
     this.term.loadAddon(this.webLinksAddon);
+    this.loadWebgl();
     this.safeFit();
 
     // Register OSC handlers BEFORE writing any pty data so markers fire.
@@ -197,6 +202,20 @@ export class TerminalController {
     );
 
     window.addEventListener('resize', this.onWindowResize);
+
+    // Auto-fit whenever the host element resizes (split add/remove, divider drag,
+    // explorer resize, tab/pane reveal) — so split panes always size correctly.
+    if (typeof ResizeObserver !== 'undefined') {
+      this.resizeObserver = new ResizeObserver(() => {
+        if (this.resizeRaf) cancelAnimationFrame(this.resizeRaf);
+        this.resizeRaf = requestAnimationFrame(() => this.safeFit());
+      });
+      try {
+        this.resizeObserver.observe(this.container);
+      } catch {
+        // ignore
+      }
+    }
 
     // Auto-run the boot command (e.g. "claude") once the shell has settled.
     if (this.bootCommand) {
@@ -473,6 +492,13 @@ export class TerminalController {
     }
     this.detector?.dispose();
     window.removeEventListener('resize', this.onWindowResize);
+    if (this.resizeRaf) cancelAnimationFrame(this.resizeRaf);
+    try {
+      this.resizeObserver?.disconnect();
+    } catch {
+      // ignore
+    }
+    this.resizeObserver = null;
 
     for (const u of this.unlisteners) {
       try {
@@ -500,6 +526,12 @@ export class TerminalController {
     }
 
     // Dispose addons + terminal.
+    try {
+      this.webglAddon?.dispose();
+    } catch {
+      // ignore
+    }
+    this.webglAddon = null;
     try {
       this.searchAddon.dispose();
     } catch {
@@ -529,6 +561,30 @@ export class TerminalController {
       this.fitAddon.fit();
     } catch {
       // Container may not be laid out yet; ignore.
+    }
+  }
+
+  /**
+   * GPU-accelerated rendering via the WebGL addon, with a safe fallback: if the
+   * WebGL context is lost (driver reset, too many contexts), dispose the addon
+   * so xterm transparently falls back to the DOM/canvas renderer.
+   */
+  private loadWebgl(): void {
+    try {
+      const addon = new WebglAddon();
+      addon.onContextLoss(() => {
+        try {
+          addon.dispose();
+        } catch {
+          // ignore
+        }
+        if (this.webglAddon === addon) this.webglAddon = null;
+      });
+      this.term.loadAddon(addon);
+      this.webglAddon = addon;
+    } catch {
+      // WebGL unavailable (rare in a modern webview) — keep the default renderer.
+      this.webglAddon = null;
     }
   }
 
