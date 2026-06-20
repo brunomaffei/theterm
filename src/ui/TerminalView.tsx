@@ -15,6 +15,7 @@ export interface TerminalViewProps {
   boot?: string;
   onBlocks: (id: string, blocks: Block[]) => void;
   onAgents?: (id: string, state: AgentState) => void;
+  onNotify?: (id: string, n: { title?: string; body: string }) => void;
   registerController: (id: string, controller: TerminalController | null) => void;
   /** Notify the parent that this pane was clicked (so it becomes the active pane). */
   onFocusRequest?: (id: string) => void;
@@ -38,6 +39,7 @@ export default function TerminalView({
   boot,
   onBlocks,
   onAgents,
+  onNotify,
   registerController,
   onFocusRequest,
   closable,
@@ -55,6 +57,7 @@ export default function TerminalView({
       container: hostRef.current,
       onBlocks: (b) => onBlocks(id, b),
       onAgents: onAgents ? (s) => onAgents(id, s) : undefined,
+      onNotify: onNotify ? (n) => onNotify(id, n) : undefined,
       initialTheme,
       cwd,
       bootCommand: boot,

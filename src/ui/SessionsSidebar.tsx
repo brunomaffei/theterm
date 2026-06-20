@@ -18,6 +18,7 @@ export interface SessionsSidebarProps {
   onNewAgent: (branch: string) => void;
   onSplit: (dir: 'row' | 'col') => void;
   onToggleAutoClaude: () => void;
+  onManageWorktrees: () => void;
 }
 
 function sessionWorking(s: Session, agents: Record<string, AgentState>): boolean {
@@ -43,6 +44,7 @@ export default function SessionsSidebar({
   onNewAgent,
   onSplit,
   onToggleAutoClaude,
+  onManageWorktrees,
 }: SessionsSidebarProps): JSX.Element {
   const [creating, setCreating] = useState(false);
   const [branch, setBranch] = useState('');
@@ -59,6 +61,16 @@ export default function SessionsSidebar({
     <aside className="sessions">
       <div className="sessions__head">
         <span className="sessions__title">sessões</span>
+        <button
+          type="button"
+          className="sessions__split"
+          onClick={onManageWorktrees}
+          disabled={!hasWorkspace}
+          title="Gerenciar worktrees (mergear / remover agentes)"
+          aria-label="Gerenciar worktrees"
+        >
+          <i className="ti ti-git-fork" aria-hidden="true" />
+        </button>
         <button
           type="button"
           className="sessions__split"

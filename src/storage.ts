@@ -203,6 +203,51 @@ export function setNotifyOnDone(on: boolean): void {
   }
 }
 
+// --- Session layout persistence (restore the cockpit on relaunch) ----------
+
+const LAYOUT_KEY = 'theterm.layout';
+
+export interface SavedPane {
+  id: string;
+  cwd?: string;
+  boot?: string;
+}
+export interface SavedSession {
+  id: string;
+  title: string;
+  cwd?: string;
+  branch?: string;
+  worktreeDir?: string;
+  panes: SavedPane[];
+  splitDir: 'row' | 'col';
+  activePaneId: string;
+}
+export interface SavedLayout {
+  workspace: string | null;
+  activeSessionId: string;
+  sessions: SavedSession[];
+}
+
+export function getSavedLayout(): SavedLayout | null {
+  try {
+    const raw = localStorage.getItem(LAYOUT_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as SavedLayout;
+    if (!parsed || !Array.isArray(parsed.sessions)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+export function setSavedLayout(layout: SavedLayout): void {
+  try {
+    localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout));
+  } catch {
+    /* ignore */
+  }
+}
+
 const AUTO_CHECKPOINT_KEY = 'theterm.autoCheckpoint';
 
 /** Auto-snapshot the workspace before a Claude run starts (default ON). */

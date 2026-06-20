@@ -30,6 +30,8 @@ export interface TerminalControllerOptions {
   bootCommand?: string;
   /** Passive agent-activity callback (drives the "agents working" panel). */
   onAgents?: (state: AgentState) => void;
+  /** Desktop-notification request from the shell/agent (OSC 9 / OSC 777). */
+  onNotify?: (n: { title?: string; body: string }) => void;
 }
 
 // Payload shapes emitted by the Rust backend.
@@ -92,6 +94,7 @@ export class TerminalController {
   private readonly bootCommand: string | null;
   private bootTimer: number | null = null;
   private readonly detector: ActivityDetector | null;
+  private readonly onNotify: ((n: { title?: string; body: string }) => void) | null;
   private readonly textDecoder = new TextDecoder('utf-8', { fatal: false });
   private ptyId: number | null = null;
   private blocks: Block[] = [];
@@ -112,6 +115,7 @@ export class TerminalController {
     this.cwd = opts.cwd ?? null;
     this.bootCommand = opts.bootCommand && opts.bootCommand.trim() ? opts.bootCommand.trim() : null;
     this.detector = opts.onAgents ? new ActivityDetector(opts.onAgents) : null;
+    this.onNotify = opts.onNotify ?? null;
 
     this.term = new Terminal({
       fontFamily: "'JetBrains Mono', ui-monospace, 'Cascadia Code', Menlo, monospace",
@@ -254,6 +258,35 @@ export class TerminalController {
         // Defensive.
       }
       return true; // swallow
+    });
+
+    // OSC 9: iTerm2-style desktop notification — "9;<body>". (ConEmu reuses
+    // OSC 9 for progress as "9;<digit>;…"; ignore those.)
+    this.term.parser.registerOscHandler(9, (data: string) => {
+      try {
+        if (!/^\d+;/.test(data)) {
+          const body = data.trim();
+          if (body) this.onNotify?.({ body });
+        }
+      } catch {
+        // Defensive.
+      }
+      return true; // consume
+    });
+
+    // OSC 777: urxvt-style notification — "777;notify;<title>;<body>".
+    this.term.parser.registerOscHandler(777, (data: string) => {
+      try {
+        const parts = data.split(';');
+        if (parts[0] === 'notify') {
+          const title = parts[1]?.trim() || undefined;
+          const body = parts.slice(2).join(';').trim();
+          if (body || title) this.onNotify?.({ title, body: body || title || '' });
+        }
+      } catch {
+        // Defensive.
+      }
+      return true; // consume
     });
   }
 

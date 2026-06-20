@@ -29,6 +29,8 @@ import {
   getNotifyOnDone,
   setNotifyOnDone,
   getAutoCheckpoint,
+  getSavedLayout,
+  setSavedLayout,
 } from './storage';
 import { notify, ensureNotifyPermission } from './notify/client';
 import { checkpointCreate } from './diff/client';
@@ -46,6 +48,7 @@ import AgentsPanel from './ui/AgentsPanel';
 import ProfilePanel from './ui/ProfilePanel';
 import VerifyPanel from './ui/VerifyPanel';
 import DiffPanel from './ui/DiffPanel';
+import WorktreesPanel from './ui/WorktreesPanel';
 import FindBar from './ui/FindBar';
 import type { AgentState } from './terminal/agents';
 import {
@@ -61,6 +64,98 @@ function baseName(p: string): string {
   return parts[parts.length - 1] ?? p;
 }
 
+interface BuiltLayout {
+  sessions: Session[];
+  activeSessionId: string;
+  pendingPaneId: string | null;
+  paneSeq: number;
+  sessionSeq: number;
+}
+
+/** Highest numeric suffix among ids like "s3"/"t12" (so new ids never collide). */
+function maxSuffix(ids: string[]): number {
+  let m = 1;
+  for (const id of ids) {
+    const n = parseInt(id.slice(1), 10);
+    if (Number.isFinite(n) && n > m) m = n;
+  }
+  return m;
+}
+
+/**
+ * Build the initial sessions: restore the saved layout for this workspace when
+ * present (the cmux "pick up where you left off"), else a single default
+ * session. The active session's active pane is deferred when the Profiler will
+ * show, so applying the loadout still boots claude once (no double-boot).
+ */
+function buildInitialSessions(workspace: string | null, defer: boolean): BuiltLayout {
+  const autoClaude = getAutoClaude();
+  try {
+    const saved = getSavedLayout();
+    if (
+      saved &&
+      saved.workspace === workspace &&
+      Array.isArray(saved.sessions) &&
+      saved.sessions.length > 0
+    ) {
+      const sessions: Session[] = saved.sessions
+        .filter((s) => s && s.id && Array.isArray(s.panes) && s.panes.length > 0)
+        .map((s) => ({
+          id: s.id,
+          title: s.title || s.id,
+          cwd: s.cwd,
+          branch: s.branch,
+          worktreeDir: s.worktreeDir,
+          panes: s.panes.map((p) => ({ id: p.id, cwd: p.cwd, boot: p.boot })),
+          splitDir: s.splitDir === 'col' ? 'col' : 'row',
+          activePaneId: s.panes.some((p) => p.id === s.activePaneId)
+            ? s.activePaneId
+            : s.panes[0].id,
+        }));
+      if (sessions.length > 0) {
+        let activeSessionId = sessions.some((s) => s.id === saved.activeSessionId)
+          ? saved.activeSessionId
+          : sessions[0].id;
+        const activeSession = sessions.find((s) => s.id === activeSessionId)!;
+        let pendingPaneId: string | null = null;
+        if (defer) {
+          const ap = activeSession.panes.find((p) => p.id === activeSession.activePaneId)!;
+          ap.boot = undefined;
+          pendingPaneId = ap.id;
+        }
+        return {
+          sessions,
+          activeSessionId,
+          pendingPaneId,
+          paneSeq: maxSuffix(sessions.flatMap((s) => s.panes.map((p) => p.id))) + 1,
+          sessionSeq: maxSuffix(sessions.map((s) => s.id)) + 1,
+        };
+      }
+    }
+  } catch {
+    // fall through to the default layout
+  }
+
+  return {
+    sessions: [
+      {
+        id: 's1',
+        title: 'Sessão 1',
+        cwd: workspace ?? undefined,
+        panes: [
+          { id: 't1', cwd: workspace ?? undefined, boot: autoClaude && !defer ? 'claude' : undefined },
+        ],
+        splitDir: 'row',
+        activePaneId: 't1',
+      },
+    ],
+    activeSessionId: 's1',
+    pendingPaneId: defer ? 't1' : null,
+    paneSeq: 2,
+    sessionSeq: 2,
+  };
+}
+
 export default function App(): JSX.Element {
   const initialWorkspaceRef = useRef<string | null>(getLastWorkspace());
   const initialWorkspace = initialWorkspaceRef.current;
@@ -72,23 +167,13 @@ export default function App(): JSX.Element {
 
   const [autoClaude, setAutoClaudeState] = useState<boolean>(() => getAutoClaude());
 
-  const [sessions, setSessions] = useState<Session[]>(() => [
-    {
-      id: 's1',
-      title: 'Sessão 1',
-      cwd: initialWorkspace ?? undefined,
-      panes: [
-        {
-          id: 't1',
-          cwd: initialWorkspace ?? undefined,
-          boot: getAutoClaude() && !deferInitialClaude ? 'claude' : undefined,
-        },
-      ],
-      splitDir: 'row',
-      activePaneId: 't1',
-    },
-  ]);
-  const [activeSessionId, setActiveSessionId] = useState('s1');
+  // Restore the saved session layout for this workspace (or a default session).
+  const builtRef = useRef<BuiltLayout | null>(null);
+  if (!builtRef.current) builtRef.current = buildInitialSessions(initialWorkspace, deferInitialClaude);
+  const built = builtRef.current;
+
+  const [sessions, setSessions] = useState<Session[]>(() => built.sessions);
+  const [activeSessionId, setActiveSessionId] = useState(built.activeSessionId);
   const [attention, setAttention] = useState<Record<string, boolean>>({});
   const [activeFilePath, setActiveFilePath] = useState<string | null>(null);
   const [activeKind, setActiveKind] = useState<'term' | 'file'>('term');
@@ -105,6 +190,7 @@ export default function App(): JSX.Element {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [findOpen, setFindOpen] = useState(false);
   const [diffOpen, setDiffOpen] = useState(false);
+  const [worktreesOpen, setWorktreesOpen] = useState(false);
   const [notifyOnDone, setNotifyOnDoneState] = useState<boolean>(() => getNotifyOnDone());
   const [theme, setTheme] = useState<Theme>(() => getTheme(getThemeId()));
   const [onboardingDismissed, setOnboardingDismissed] = useState<boolean>(() => isOnboarded());
@@ -130,8 +216,8 @@ export default function App(): JSX.Element {
   const activePaneId = activeSession?.activePaneId ?? null;
 
   const controllersRef = useRef<Map<string, TerminalController>>(new Map());
-  const seqRef = useRef(2); // pane (terminal) id counter
-  const sessionSeqRef = useRef(2); // session id counter
+  const seqRef = useRef(built.paneSeq); // pane (terminal) id counter
+  const sessionSeqRef = useRef(built.sessionSeq); // session id counter
   const workspaceRef = useRef<string | null>(null);
   workspaceRef.current = workspace;
   const activeSessionIdRef = useRef(activeSessionId);
@@ -161,7 +247,7 @@ export default function App(): JSX.Element {
   // Deferred-claude-boot bookkeeping (see deferInitialClaude). pendingBootRef
   // holds the id of a terminal that should boot `claude` once the Profiler card
   // for its workspace is applied or dismissed.
-  const pendingBootRef = useRef<string | null>(deferInitialClaude ? 't1' : null);
+  const pendingBootRef = useRef<string | null>(built.pendingPaneId);
   const safetyTimerRef = useRef<number | null>(null);
 
   const activeController = useCallback(
@@ -261,10 +347,36 @@ export default function App(): JSX.Element {
     }, 3500);
   }, []);
 
+  // OSC 9/777 notifications from a pane: ring the sidebar if it's a background
+  // session, and fire a desktop notification when THETERM is unfocused. Works
+  // for any tool that emits the escape sequence (not just Claude's TUI).
+  const handleNotify = useCallback((id: string, n: { title?: string; body: string }) => {
+    const session = sessionsRef.current.find((s) => s.panes.some((p) => p.id === id));
+    const isActive =
+      !!session &&
+      session.id === activeSessionIdRef.current &&
+      activeKindRef.current === 'term';
+    if (session && !isActive) {
+      setAttention((prev) => (prev[session.id] ? prev : { ...prev, [session.id]: true }));
+    }
+    if (!windowFocusedRef.current) {
+      void notify(n.title || `THETERM — ${session?.title ?? 'Sessão'}`, n.body || 'Notificação');
+    }
+  }, []);
+
   useEffect(() => {
     applyTheme(theme);
     controllersRef.current.forEach((c) => c.setTheme(theme));
   }, [theme]);
+
+  // Persist the session layout for the current workspace so the cockpit can be
+  // restored on relaunch (lightly debounced).
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      setSavedLayout({ workspace, activeSessionId, sessions });
+    }, 400);
+    return () => window.clearTimeout(t);
+  }, [sessions, activeSessionId, workspace]);
 
   const loadAiStatus = useCallback(() => {
     fetchAiStatus()
@@ -318,6 +430,13 @@ export default function App(): JSX.Element {
     const c = controllersRef.current.get(id);
     if (c) {
       c.runCommand('claude');
+      // Reflect the boot in state so a restored layout re-boots claude here.
+      setSessions((prev) =>
+        prev.map((s) => ({
+          ...s,
+          panes: s.panes.map((p) => (p.id === id ? { ...p, boot: 'claude' } : p)),
+        })),
+      );
       return;
     }
     if (attempt < 5) window.setTimeout(() => bootClaudeIn(id, attempt + 1), 300);
@@ -972,6 +1091,7 @@ export default function App(): JSX.Element {
           onNewAgent={newAgent}
           onSplit={splitActive}
           onToggleAutoClaude={toggleAutoClaude}
+          onManageWorktrees={() => setWorktreesOpen(true)}
         />
 
         <CenterArea
@@ -987,6 +1107,7 @@ export default function App(): JSX.Element {
           onClosePane={closePane}
           registerController={registerController}
           onAgents={handleAgents}
+          onNotify={handleNotify}
           onEditorChange={editorChange}
           onEditorSave={saveFile}
         />
@@ -1040,6 +1161,14 @@ export default function App(): JSX.Element {
           theme={theme}
           showToast={showToast}
           onClose={() => setDiffOpen(false)}
+        />
+      )}
+
+      {worktreesOpen && workspace && (
+        <WorktreesPanel
+          path={workspace}
+          showToast={showToast}
+          onClose={() => setWorktreesOpen(false)}
         />
       )}
 

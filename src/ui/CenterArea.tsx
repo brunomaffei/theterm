@@ -41,6 +41,7 @@ export interface CenterAreaProps {
   onClosePane: (sessionId: string, paneId: string) => void;
   registerController: (id: string, controller: TerminalController | null) => void;
   onAgents: (id: string, state: AgentState) => void;
+  onNotify: (id: string, n: { title?: string; body: string }) => void;
   onEditorChange: (path: string, value: string) => void;
   onEditorSave: (path: string) => void;
 }
@@ -76,6 +77,7 @@ export default function CenterArea({
   onClosePane,
   registerController,
   onAgents,
+  onNotify,
   onEditorChange,
   onEditorSave,
 }: CenterAreaProps): JSX.Element {
@@ -138,6 +140,7 @@ export default function CenterArea({
                   boot={p.boot}
                   onBlocks={NOOP_BLOCKS}
                   onAgents={onAgents}
+                  onNotify={onNotify}
                   registerController={registerController}
                   onFocusRequest={(pid) => onSelectPane(s.id, pid)}
                   onClose={() => onClosePane(s.id, p.id)}
