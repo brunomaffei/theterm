@@ -133,7 +133,7 @@ export default function ProfilePanel({
       <div className="profile-card__foot">
         <span className="profile-card__hint">
           Grava {count} agente{count === 1 ? '' : 's'} em{' '}
-          <code>.claude/agents/</code> + <code>CLAUDE.md</code>
+          <code>.claude/agents/</code> + <code>CLAUDE.md</code> e inicia o Claude
         </span>
         <div className="profile-card__actions">
           <button type="button" className="btn-ghost" onClick={onDismiss}>

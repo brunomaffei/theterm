@@ -63,6 +63,11 @@ export default function App(): JSX.Element {
   const initialWorkspaceRef = useRef<string | null>(getLastWorkspace());
   const initialWorkspace = initialWorkspaceRef.current;
 
+  // When a workspace is open the Project Profiler will show, so DON'T auto-boot
+  // claude up front — boot it once the loadout is applied (with agents) or the
+  // card is dismissed. Avoids the "claude starts, then restarts" double-boot.
+  const deferInitialClaude = !!initialWorkspace && getAutoClaude();
+
   const [autoClaude, setAutoClaudeState] = useState<boolean>(() => getAutoClaude());
 
   const [terminals, setTerminals] = useState<TermItem[]>(() => [
@@ -70,7 +75,7 @@ export default function App(): JSX.Element {
       id: 't1',
       title: 'Terminal 1',
       cwd: initialWorkspace ?? undefined,
-      boot: getAutoClaude() ? 'claude' : undefined,
+      boot: getAutoClaude() && !deferInitialClaude ? 'claude' : undefined,
     },
   ]);
   const [activeTermId, setActiveTermId] = useState('t1');
@@ -134,6 +139,12 @@ export default function App(): JSX.Element {
   const finishTimersRef = useRef<Record<string, number>>({});
   const lastAutoCpRef = useRef(0);
   const maybeAutoCheckpointRef = useRef<() => void>(() => {});
+
+  // Deferred-claude-boot bookkeeping (see deferInitialClaude). pendingBootRef
+  // holds the id of a terminal that should boot `claude` once the Profiler card
+  // for its workspace is applied or dismissed.
+  const pendingBootRef = useRef<string | null>(deferInitialClaude ? 't1' : null);
+  const safetyTimerRef = useRef<number | null>(null);
 
   const activeController = useCallback(
     (): TerminalController | null => controllersRef.current.get(activeTermIdRef.current) ?? null,
@@ -254,6 +265,62 @@ export default function App(): JSX.Element {
     window.setTimeout(() => setToast((cur) => (cur === msg ? null : cur)), 5500);
   }, []);
 
+  // --- Deferred claude boot ------------------------------------------------
+  // Run `claude` in an already-open terminal (its shell sits at a prompt because
+  // we didn't pass a boot command). Retries briefly until the controller mounts.
+  const bootClaudeIn = useCallback((id: string, attempt = 0): void => {
+    const c = controllersRef.current.get(id);
+    if (c) {
+      c.runCommand('claude');
+      return;
+    }
+    if (attempt < 5) window.setTimeout(() => bootClaudeIn(id, attempt + 1), 300);
+  }, []);
+
+  const clearSafetyTimer = useCallback(() => {
+    if (safetyTimerRef.current !== null) {
+      window.clearTimeout(safetyTimerRef.current);
+      safetyTimerRef.current = null;
+    }
+  }, []);
+
+  // Boot claude in the pending terminal now (on apply/dismiss/scan-failure).
+  const flushPendingBoot = useCallback(() => {
+    clearSafetyTimer();
+    const id = pendingBootRef.current;
+    if (!id) return;
+    pendingBootRef.current = null;
+    bootClaudeIn(id);
+  }, [bootClaudeIn, clearSafetyTimer]);
+
+  // Mark a terminal as awaiting a claude boot, with a backstop so a hung profile
+  // scan can never strand the user without claude.
+  const armPendingBoot = useCallback(
+    (id: string) => {
+      const prev = pendingBootRef.current;
+      if (prev && prev !== id) bootClaudeIn(prev);
+      pendingBootRef.current = id;
+      clearSafetyTimer();
+      safetyTimerRef.current = window.setTimeout(() => {
+        safetyTimerRef.current = null;
+        flushPendingBoot();
+      }, 30000);
+    },
+    [bootClaudeIn, clearSafetyTimer, flushPendingBoot],
+  );
+
+  // Backstop for the initial deferred boot: if the user never engages the
+  // Profiler card, boot claude anyway so the terminal is never left idle.
+  useEffect(() => {
+    if (!pendingBootRef.current) return;
+    safetyTimerRef.current = window.setTimeout(() => {
+      safetyTimerRef.current = null;
+      flushPendingBoot();
+    }, 30000);
+    return clearSafetyTimer;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // --- Project Profiler ----------------------------------------------------
   // Whenever a workspace is opened, scan it and surface the recommended agent
   // team. Cheap, best-effort: failures just leave the card hidden.
@@ -273,30 +340,76 @@ export default function App(): JSX.Element {
         if (cancelled) return;
         setProfile(p);
         setProfileVisible(true);
+        // The card now drives the claude boot via apply/dismiss; the pending
+        // backstop stays armed so claude still boots if the card is ignored.
       })
-      .catch(() => {});
+      .catch(() => {
+        // No card will show → boot claude so the user isn't left without it.
+        if (!cancelled) flushPendingBoot();
+      });
     return () => {
       cancelled = true;
     };
-  }, [workspace]);
+  }, [workspace, flushPendingBoot]);
+
+  // Restart the active terminal into a FRESH `claude` (in `cwd`), so a newly
+  // applied agent loadout is picked up without the user restarting it by hand.
+  // Swapping the terminal's id forces React to remount it: the old PTY (and its
+  // claude) is disposed and a new one boots `claude` from scratch.
+  const rebootClaude = useCallback((cwd?: string) => {
+    const targetId = activeTermIdRef.current;
+    const dir = cwd ?? workspaceRef.current ?? undefined;
+    // The new terminal boots claude via its boot prop, so cancel any pending
+    // deferred boot for the one we're replacing.
+    if (pendingBootRef.current === targetId) pendingBootRef.current = null;
+    if (safetyTimerRef.current !== null) {
+      window.clearTimeout(safetyTimerRef.current);
+      safetyTimerRef.current = null;
+    }
+    const n = seqRef.current;
+    seqRef.current += 1;
+    const newId = `t${n}`;
+    setTerminals((prev) => {
+      if (!prev.some((t) => t.id === targetId)) return prev;
+      return prev.map((t) =>
+        t.id === targetId ? { id: newId, title: t.title, cwd: dir ?? t.cwd, boot: 'claude' } : t,
+      );
+    });
+    setActiveTermId((cur) => (cur === targetId ? newId : cur));
+    setActiveKind('term');
+    // Drop the old terminal's run bookkeeping.
+    setAgentsByTerm((prev) => {
+      if (!(targetId in prev)) return prev;
+      const next = { ...prev };
+      delete next[targetId];
+      return next;
+    });
+    const ft = finishTimersRef.current[targetId];
+    if (ft) {
+      window.clearTimeout(ft);
+      delete finishTimersRef.current[targetId];
+    }
+    delete runStateRef.current[targetId];
+  }, []);
 
   const handleApplyLoadout = useCallback(
     (agentIds: string[]) => {
       if (!profile) return;
       setApplyingLoadout(true);
-      applyLoadout(profile.path, agentIds, aiBrief)
+      const path = profile.path;
+      applyLoadout(path, agentIds, aiBrief)
         .then(() => {
           setProfileVisible(false);
-          showToast(
-            'Time preparado! Reinicie o claude (ou abra um novo terminal) para carregar os agentes.',
-          );
+          showToast('Time preparado! Iniciando o Claude com os agentes…');
+          // Boot a fresh claude so it loads the just-written .claude/agents.
+          rebootClaude(path);
         })
         .catch((err: unknown) => {
           showToast(`Falha ao preparar: ${err instanceof Error ? err.message : String(err)}`);
         })
         .finally(() => setApplyingLoadout(false));
     },
-    [profile, aiBrief, showToast],
+    [profile, aiBrief, showToast, rebootClaude],
   );
 
   const handleAiSelect = useCallback(() => {
@@ -408,16 +521,22 @@ export default function App(): JSX.Element {
   }, []);
 
   // --- Terminals -----------------------------------------------------------
-  const addTerminal = useCallback((cwd?: string) => {
-    const n = seqRef.current;
-    seqRef.current += 1;
-    const id = `t${n}`;
-    const dir = cwd ?? workspaceRef.current ?? undefined;
-    const boot = autoClaudeRef.current ? 'claude' : undefined;
-    setTerminals((prev) => [...prev, { id, title: `Terminal ${n}`, cwd: dir, boot }]);
-    setActiveTermId(id);
-    setActiveKind('term');
-  }, []);
+  const addTerminal = useCallback(
+    (cwd?: string, opts?: { deferClaude?: boolean }) => {
+      const n = seqRef.current;
+      seqRef.current += 1;
+      const id = `t${n}`;
+      const dir = cwd ?? workspaceRef.current ?? undefined;
+      const wantClaude = autoClaudeRef.current;
+      const defer = wantClaude && !!opts?.deferClaude;
+      const boot = wantClaude && !defer ? 'claude' : undefined;
+      setTerminals((prev) => [...prev, { id, title: `Terminal ${n}`, cwd: dir, boot }]);
+      setActiveTermId(id);
+      setActiveKind('term');
+      if (defer) armPendingBoot(id);
+    },
+    [armPendingBoot],
+  );
 
   const selectTerm = useCallback((id: string) => {
     setActiveTermId(id);
@@ -460,7 +579,9 @@ export default function App(): JSX.Element {
         if (!path) return;
         setWorkspace(path);
         setLastWorkspace(path);
-        addTerminal(path);
+        // Defer the claude boot: the Profiler will show for the new workspace,
+        // and applying it restarts claude with the agents (no double-boot).
+        addTerminal(path, { deferClaude: true });
       })
       .catch(() => {});
   }, [addTerminal]);
@@ -741,7 +862,10 @@ export default function App(): JSX.Element {
           aiDone={aiDone}
           onAiSelect={handleAiSelect}
           onApply={handleApplyLoadout}
-          onDismiss={() => setProfileVisible(false)}
+          onDismiss={() => {
+            setProfileVisible(false);
+            flushPendingBoot();
+          }}
         />
       )}
 
