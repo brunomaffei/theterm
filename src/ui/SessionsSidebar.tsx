@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import type { Session } from './CenterArea';
 import type { AgentState } from '../terminal/agents';
+import { repoBranches, type RepoBranches } from '../worktrees/client';
 
 export interface SessionsSidebarProps {
   sessions: Session[];
@@ -12,10 +13,13 @@ export interface SessionsSidebarProps {
   attention: Record<string, boolean>;
   autoClaude: boolean;
   hasWorkspace: boolean;
+  /** Open workspace path (for the agent base-branch picker). */
+  workspace: string | null;
   onSelectSession: (id: string) => void;
   onCloseSession: (id: string) => void;
   onNewTerminal: () => void;
-  onNewAgent: (branch: string) => void;
+  /** Spawn an agent worktree forked from `base` (auto-named branch). */
+  onNewAgent: (base: string) => void;
   onSplit: (dir: 'row' | 'col') => void;
   onToggleAutoClaude: () => void;
   onManageWorktrees: () => void;
@@ -25,6 +29,22 @@ export interface SessionsSidebarProps {
 
 function sessionWorking(s: Session, agents: Record<string, AgentState>): boolean {
   return s.panes.some((p) => agents[p.id]?.working);
+}
+
+/** Order the base options: default branch first, then current, then the rest. */
+function orderedBases(b: RepoBranches): { name: string; tag?: string }[] {
+  const seen = new Set<string>();
+  const out: { name: string; tag?: string }[] = [];
+  const add = (name: string, tag?: string): void => {
+    if (name && !seen.has(name)) {
+      seen.add(name);
+      out.push({ name, tag });
+    }
+  };
+  add(b.defaultBranch, 'padrão');
+  add(b.current, b.current === b.defaultBranch ? undefined : 'atual');
+  for (const br of b.branches) add(br);
+  return out.slice(0, 8);
 }
 
 /**
@@ -40,6 +60,7 @@ export default function SessionsSidebar({
   attention,
   autoClaude,
   hasWorkspace,
+  workspace,
   onSelectSession,
   onCloseSession,
   onNewTerminal,
@@ -51,13 +72,26 @@ export default function SessionsSidebar({
   canOpenProfile,
 }: SessionsSidebarProps): JSX.Element {
   const [creating, setCreating] = useState(false);
-  const [branch, setBranch] = useState('');
+  const [branches, setBranches] = useState<RepoBranches | null>(null);
+  const [loadingBr, setLoadingBr] = useState(false);
 
-  const submitAgent = (): void => {
-    const b = branch.trim();
-    if (!b) return;
-    onNewAgent(b);
-    setBranch('');
+  const toggleCreating = (): void => {
+    setCreating((c) => {
+      const next = !c;
+      if (next && workspace) {
+        setLoadingBr(true);
+        setBranches(null);
+        repoBranches(workspace)
+          .then(setBranches)
+          .catch(() => setBranches({ current: '', defaultBranch: '', branches: [] }))
+          .finally(() => setLoadingBr(false));
+      }
+      return next;
+    });
+  };
+
+  const pickBase = (base: string): void => {
+    onNewAgent(base);
     setCreating(false);
   };
 
@@ -159,24 +193,41 @@ export default function SessionsSidebar({
 
       {creating && (
         <div className="sessions__newagent">
-          <input
-            autoFocus
-            className="sessions__branch"
-            value={branch}
-            onChange={(e) => setBranch(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') submitAgent();
-              else if (e.key === 'Escape') {
-                setCreating(false);
-                setBranch('');
-              }
-            }}
-            placeholder="branch (ex: feat/login)"
-            spellCheck={false}
-          />
-          <button type="button" className="sessions__branch-go" onClick={submitAgent} title="Criar agente">
-            <i className="ti ti-arrow-right" aria-hidden="true" />
-          </button>
+          <div className="sessions__newagent-head">
+            <span>Novo agente — base</span>
+            <button
+              type="button"
+              className="sessions__newagent-x"
+              onClick={() => setCreating(false)}
+              aria-label="Cancelar"
+            >
+              <i className="ti ti-x" aria-hidden="true" />
+            </button>
+          </div>
+          {loadingBr ? (
+            <div className="sessions__br-empty">
+              <i className="ti ti-loader-2 spin-ic" aria-hidden="true" /> lendo branches…
+            </div>
+          ) : branches && (branches.defaultBranch || branches.current || branches.branches.length) ? (
+            orderedBases(branches).map((b) => (
+              <button
+                key={b.name}
+                type="button"
+                className="sessions__base"
+                onClick={() => pickBase(b.name)}
+                title={`Criar agente (worktree) a partir de ${b.name}`}
+              >
+                <i className="ti ti-git-branch" aria-hidden="true" />
+                <span className="sessions__base-name">{b.name}</span>
+                {b.tag && <span className="sessions__base-tag">{b.tag}</span>}
+              </button>
+            ))
+          ) : (
+            <button type="button" className="sessions__base" onClick={() => pickBase('')}>
+              <i className="ti ti-git-branch" aria-hidden="true" />
+              <span className="sessions__base-name">da branch atual</span>
+            </button>
+          )}
         </div>
       )}
 
@@ -186,12 +237,12 @@ export default function SessionsSidebar({
         </button>
         <button
           type="button"
-          className="sessions__new sessions__new--agent"
-          onClick={() => setCreating((c) => !c)}
+          className={`sessions__new sessions__new--agent ${creating ? 'sessions__new--on' : ''}`}
+          onClick={toggleCreating}
           disabled={!hasWorkspace}
           title={
             hasWorkspace
-              ? 'Novo agente em worktree isolado (branch próprio)'
+              ? 'Novo agente em worktree isolado (escolha a base; nome automático)'
               : 'Abra um projeto git para criar agentes em worktree'
           }
         >

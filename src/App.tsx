@@ -44,7 +44,6 @@ import { languageForPath, type OpenFile } from './ui/EditorArea';
 import StatusBar from './ui/StatusBar';
 import CommandPalette from './ui/CommandPalette';
 import Onboarding from './ui/Onboarding';
-import AgentsPanel from './ui/AgentsPanel';
 import ProfilePanel from './ui/ProfilePanel';
 import VerifyPanel from './ui/VerifyPanel';
 import DiffPanel from './ui/DiffPanel';
@@ -834,19 +833,22 @@ export default function App(): JSX.Element {
   // Spawn an isolated worktree agent: a fresh branch + directory tree where its
   // own claude can work in parallel without touching the main checkout.
   const newAgent = useCallback(
-    (branch: string) => {
+    (base: string) => {
       const ws = workspaceRef.current;
       if (!ws) {
         showToast('Abra um projeto git para criar um agente.');
         return;
       }
-      worktreeCreate(ws, branch)
+      // Empty branch → backend auto-names "agent/N"; forks from `base` (e.g. main).
+      worktreeCreate(ws, '', base)
         .then((wt) => {
           addSession({ cwd: wt.dir, branch: wt.branch, worktreeDir: wt.dir, forceClaude: true });
-          showToast(`Worktree '${wt.branch}' criado. Claude iniciando…`);
+          showToast(
+            `Agente '${wt.branch}' criado${base ? ` (base: ${base})` : ''}. Claude iniciando…`,
+          );
         })
         .catch((e: unknown) =>
-          showToast(`Falha ao criar o worktree: ${e instanceof Error ? e.message : String(e)}`),
+          showToast(`Falha ao criar o agente: ${e instanceof Error ? e.message : String(e)}`),
         );
     },
     [addSession, showToast],
@@ -1036,9 +1038,10 @@ export default function App(): JSX.Element {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [paletteOpen, addSession, splitActive, openFolder, saveFile]);
 
+  // Live agent state for the active pane — feeds the status-bar token meter.
+  // (The old right-side AgentsPanel was removed; the sessions sidebar shows
+  // per-session working status now.)
   const activeAgents = activePaneId ? agentsByTerm[activePaneId] : undefined;
-  const showAgents =
-    !!activeAgents && (activeAgents.working || activeAgents.workers.length > 0);
 
   // Pane sizing is automatic (the controller's ResizeObserver), so no manual
   // fit() wiring is needed on layout changes here.
@@ -1100,6 +1103,7 @@ export default function App(): JSX.Element {
           attention={attention}
           autoClaude={autoClaude}
           hasWorkspace={!!workspace}
+          workspace={workspace}
           onSelectSession={selectSession}
           onCloseSession={closeSession}
           onNewTerminal={() => addSession()}
@@ -1129,7 +1133,6 @@ export default function App(): JSX.Element {
           onEditorSave={saveFile}
         />
 
-        {showAgents && activeAgents && <AgentsPanel state={activeAgents} />}
       </div>
 
       <StatusBar

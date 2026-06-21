@@ -76,6 +76,7 @@ pub fn run() {
             worktrees::worktree_list,
             worktrees::worktree_remove,
             worktrees::worktree_merge,
+            worktrees::repo_branches,
         ])
         .run(tauri::generate_context!())
         .expect("error running tauri app");

@@ -14,9 +14,27 @@ export interface MergeResult {
   output: string;
 }
 
-/** Create (or attach) a worktree for `branch`; new branches fork from HEAD. */
-export async function worktreeCreate(path: string, branch: string): Promise<Worktree> {
-  return invoke<Worktree>('worktree_create', { path, branch });
+export interface RepoBranches {
+  current: string;
+  defaultBranch: string;
+  branches: string[];
+}
+
+/**
+ * Create (or attach) a worktree. Empty `branch` → auto-named "agent/N". A new
+ * branch forks from `base` (e.g. "main") when given, else from HEAD.
+ */
+export async function worktreeCreate(
+  path: string,
+  branch: string,
+  base?: string,
+): Promise<Worktree> {
+  return invoke<Worktree>('worktree_create', { path, branch, base: base ?? null });
+}
+
+/** Branch info for the agent base-branch picker. */
+export async function repoBranches(path: string): Promise<RepoBranches> {
+  return invoke<RepoBranches>('repo_branches', { path });
 }
 
 /** List the repo's worktrees (main checkout first). */

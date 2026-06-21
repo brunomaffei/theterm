@@ -66,10 +66,27 @@ fn branch_exists(repo: &str, branch: &str) -> bool {
     git(repo, &["show-ref", "--verify", "--quiet", &format!("refs/heads/{branch}")]).is_ok()
 }
 
-/// Create (or attach) a worktree for `branch` and return it. If the branch is
-/// new it's created from the current HEAD.
+/// First free "agent/N" name (branch + worktree dir both unused).
+fn next_agent_branch(repo: &str) -> String {
+    for n in 1..=9999 {
+        let b = format!("agent/{n}");
+        let dir = worktrees_root(repo).join(sanitize(&b));
+        if !branch_exists(repo, &b) && !dir.exists() {
+            return b;
+        }
+    }
+    "agent/x".to_string()
+}
+
+/// Create (or attach) a worktree and return it. An empty `branch` auto-names it
+/// "agent/N". A new branch forks from `base` (e.g. "main") when given, else from
+/// the current HEAD.
 #[tauri::command]
-pub fn worktree_create(path: String, branch: String) -> Result<Worktree, String> {
+pub fn worktree_create(
+    path: String,
+    branch: String,
+    base: Option<String>,
+) -> Result<Worktree, String> {
     let dir = Path::new(&path);
     if !dir.is_dir() {
         return Err(format!("não é uma pasta: {path}"));
@@ -77,30 +94,86 @@ pub fn worktree_create(path: String, branch: String) -> Result<Worktree, String>
     git(&path, &["rev-parse", "--git-dir"])
         .map_err(|_| "Esta pasta não é um repositório git.".to_string())?;
 
-    let branch = branch.trim();
-    if branch.is_empty() {
-        return Err("Informe um nome de branch.".to_string());
-    }
+    let trimmed = branch.trim();
+    let branch = if trimmed.is_empty() {
+        next_agent_branch(&path)
+    } else {
+        trimmed.to_string()
+    };
 
-    let wt_dir = worktrees_root(&path).join(sanitize(branch));
+    let wt_dir = worktrees_root(&path).join(sanitize(&branch));
     let wt_str = wt_dir.to_string_lossy().into_owned();
-
     if wt_dir.exists() {
         return Err(format!("Já existe um worktree em {wt_str}."));
     }
 
-    if branch_exists(&path, branch) {
-        git(&path, &["worktree", "add", &wt_str, branch])
+    let base = base.as_deref().map(str::trim).filter(|s| !s.is_empty());
+
+    if branch_exists(&path, &branch) {
+        // Existing branch: attach it (base is irrelevant).
+        git(&path, &["worktree", "add", &wt_str, &branch])
             .map_err(|e| format!("Falha ao criar o worktree: {e}"))?;
     } else {
-        git(&path, &["worktree", "add", "-b", branch, &wt_str])
-            .map_err(|e| format!("Falha ao criar o worktree: {e}"))?;
+        // New branch forked from `base` (or HEAD when base is None).
+        let mut args: Vec<&str> = vec!["worktree", "add", "-b", &branch, &wt_str];
+        if let Some(b) = base {
+            args.push(b);
+        }
+        git(&path, &args).map_err(|e| format!("Falha ao criar o worktree: {e}"))?;
     }
 
     Ok(Worktree {
-        branch: branch.to_string(),
+        branch,
         dir: wt_str,
         is_main: false,
+    })
+}
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoBranches {
+    /// The branch the main checkout is currently on.
+    pub current: String,
+    /// Best guess of the repo's default branch (origin HEAD, else main/master).
+    pub default_branch: String,
+    /// Local branch names.
+    pub branches: Vec<String>,
+}
+
+/// Branch info for the "base" picker when spawning an agent worktree.
+#[tauri::command]
+pub fn repo_branches(path: String) -> Result<RepoBranches, String> {
+    let dir = Path::new(&path);
+    if !dir.is_dir() {
+        return Err(format!("não é uma pasta: {path}"));
+    }
+    let current = git(&path, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_default();
+
+    let default_branch = git(&path, &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
+        .ok()
+        .map(|s| s.trim().trim_start_matches("origin/").to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| {
+            if branch_exists(&path, "main") {
+                "main".to_string()
+            } else if branch_exists(&path, "master") {
+                "master".to_string()
+            } else {
+                current.clone()
+            }
+        });
+
+    let branches = git(&path, &["branch", "--format=%(refname:short)"])
+        .unwrap_or_default()
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty() && !l.starts_with("agent/"))
+        .collect();
+
+    Ok(RepoBranches {
+        current,
+        default_branch,
+        branches,
     })
 }
 
